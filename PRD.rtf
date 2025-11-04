@@ -1,0 +1,348 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww20620\viewh10460\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 # Product Requirements Document (PRD)\
+\
+## Project: Supplier Website Price & Offer Scraper\
+\
+**Version:** 1.1  \
+**Last Updated:** 2025-10-28  \
+**Owner:** Damien Green  \
+\
+---\
+\
+## 1. Executive Summary\
+\
+We are developing an application that automatically scrapes supplier websites for product information and offers. The application must:\
+\
+1. Scrape all product pages under given root URLs nightly.\
+2. Extract **URL**, **sale price**, and **original price** for each product.\
+3. Store all prices historically and detect changes.\
+4. Email a digest of changes via **SendGrid**.\
+5. Sync Shopify product prices using the **metafield `custom.source_url`** for mapping.\
+6. Detect when products exist on one side but not the other and notify.\
+7. Scrape `/offers` pages nightly, detect new offers, and email notifications.\
+\
+---\
+\
+## 2. Goals\
+\
+- Maintain up-to-date supplier pricing and automatically sync with Shopify.\
+- Accurately store price histories in **Supabase**.\
+- Notify users of:\
+  - Price changes.\
+  - New offers.\
+  - Supplier-only or Shopify-only products.\
+- Operate automatically, overnight, and with minimal human intervention.\
+\
+---\
+\
+## 3. Non-Goals\
+\
+- Full catalog ingestion (beyond product URLs and pricing).\
+- Manual data entry or frontend user interface (beyond simple admin console).\
+- Any scraping outside explicitly allowed domains.\
+\
+---\
+\
+## 4. Technology Stack\
+\
+| Component | Technology | Reason |\
+|------------|-------------|--------|\
+| Web scraping | **Firecrawl v2** | High-accuracy crawling, actions, JSON extraction, webhooks, locale control |\
+| Backend | **Supabase (Postgres + Edge Functions + Cron)** | Unified DB, scheduled jobs, secure secret storage |\
+| E-commerce | **Shopify GraphQL Admin API** | To update `price` and `compareAtPrice` |\
+| Email | **SendGrid (v3 API)** | Scalable transactional email with templates & attachments |\
+| Language | **Python or Node.js** | Server-side agent orchestration and ETL |\
+| AI assist | **o3-mini / Claude 3.5 Sonnet** | Optional structured extraction fallback |\
+\
+---\
+\
+## 5. Crawling Scope\
+\
+**Initial URLs**\
+- https://www.hondaoutdoors.co.nz/\
+- https://www.hondamarine.co.nz/\
+- https://www.hondamotorbikes.co.nz/\
+\
+**Frequency:** Nightly (02:00 NZT, configurable)  \
+**Scope:** All sub-pages of each domain, restricted by rules.  \
+**Locale:** `NZ`, language `en-NZ`.\
+\
+**Ethics & Compliance:**  \
+Honor `robots.txt`, crawl politely, and throttle requests.\
+\
+---\
+\
+## 6. Data Extraction\
+\
+### 6.1 Deterministic Parsing (Preferred)\
+1. **JSON-LD**: Extract `Product.offers.price` and `priceCurrency`.\
+2. **Microdata & Meta tags**: Parse `itemprop="price"` or Open Graph tags.\
+3. **DOM selectors**: `.price`, `.sale-price`, `.compare-at`.\
+4. **Normalize currency** to NZD, ensure numeric precision.\
+\
+### 6.2 Fallback Parsing (LLM-based)\
+If deterministic parsing fails, call Firecrawl `/extract` in JSON mode with strict schema:\
+```json\
+\{ "url": "", "sale_price": 0, "original_price": 0, "currency": "NZD" \}\
+6.3 Provenance\
+Store HTML snippet and optional screenshot for each extracted price.\
+\
+7. Offer Detection\
+Each night, crawl /offers and related URLs.\
+Extract:\
+\
+Offer title\
+\
+Summary/description\
+\
+Dates (start, end)\
+\
+Offer URL\
+\
+Trigger email when:\
+\
+New offer appears.\
+\
+Offer details change.\
+\
+8. Shopify Integration\
+8.1 Mapping\
+Match supplier products to Shopify using:\
+\
+graphql\
+Copy code\
+products(first: 10, query: "metafields.custom.source_url:\\"<canonical URL>\\"")\
+Shopify metafield definition:\
+\
+Namespace: custom\
+\
+Key: source_url\
+\
+Type: single_line_text_field\
+\
+Admin Filterable: true\
+\
+8.2 Price Updates\
+Use GraphQL mutation:\
+\
+graphql\
+Copy code\
+mutation \{\
+  productVariantsBulkUpdate(productId: "gid://shopify/Product/123", variants: [\
+    \{ id: "gid://shopify/ProductVariant/456", price: "899.00", compareAtPrice: "999.00" \}\
+  ]) \{ userErrors \{ field message \} \}\
+\}\
+8.3 Missing Product Detection\
+Supplier-Only (A\\B)\
+Products on supplier site not found on Shopify (source_url missing) \uc0\u8594  Notify.\
+\
+Shopify-Only (B\\A)\
+Shopify products with source_url not present on supplier site \uc0\u8594  Notify.\
+\
+Check for redirects (relink suggestion).\
+\
+Report 404 or missing URLs.\
+\
+9. Data Model (Supabase)\
+Tables\
+domains\
+Field	Type	Notes\
+id	serial	\
+root_url	text	unique\
+timezone	text	default "Pacific/Auckland"\
+active	bool	\
+\
+product_pages\
+Field	Type	Notes\
+id	serial	\
+domain_id	FK	\
+url	text	unique per domain\
+canonical_url	text	normalized\
+latest_sale_price	numeric(12,2)	\
+latest_original_price	numeric(12,2)	\
+confidence	text	high/low\
+last_seen_at	timestamptz	\
+\
+price_history\
+Field	Type	Notes\
+id	serial	\
+product_page_id	FK	\
+scraped_at	timestamptz	\
+sale_price	numeric(12,2)	\
+original_price	numeric(12,2)	\
+source	text	jsonld/dom/meta/llm\
+html_snippet	text	\
+\
+offers\
+Field	Type	Notes\
+id	serial	\
+domain_id	FK	\
+offer_url	text	unique\
+title	text	\
+summary	text	\
+starts_on	date	\
+ends_on	date	\
+last_seen_at	timestamptz	\
+\
+shopify_catalog_cache\
+Field	Type	Notes\
+product_id	text	Shopify GID\
+title	text	\
+source_url	text	\
+source_url_canonical	text	indexed\
+synced_at	timestamptz	\
+\
+10. Workflow\
+10.1 Nightly Job\
+Supabase Cron triggers Edge Function.\
+\
+Firecrawl Map + Crawl \uc0\u8594  all product pages.\
+\
+Extract prices \uc0\u8594  store in product_pages + price_history.\
+\
+Compute diffs \uc0\u8594  detect changes.\
+\
+Update Shopify via GraphQL.\
+\
+Crawl /offers \uc0\u8594  detect new offers.\
+\
+Perform reconciliation (supplier vs Shopify).\
+\
+Send SendGrid email with all sections + CSV attachments.\
+\
+10.2 Reconciliation\
+Build set A (supplier URLs) and B (Shopify URLs from metafield).\
+\
+Find A \\ B and B \\ A.\
+\
+For each:\
+\
+Log record in reconcile_results.\
+\
+Include in nightly email.\
+\
+11. Email Notifications (SendGrid)\
+Provider\
+SendGrid v3 API\
+Use Dynamic Templates for:\
+\
+Nightly Digest\
+\
+Missing Product Alerts\
+\
+Payload Example\
+json\
+Copy code\
+\{\
+  "from": \{"email": "alerts@yourdomain.co.nz"\},\
+  "personalizations": [\
+    \{\
+      "to": [\{"email": "ops@yourdomain.co.nz"\}, \{"email": "buying@yourdomain.co.nz"\}],\
+      "dynamic_template_data": \{\
+        "domain": "hondamarine.co.nz",\
+        "price_changes": 24,\
+        "new_offers": 3,\
+        "supplier_only": 5,\
+        "shopify_only": 2\
+      \}\
+    \}\
+  ],\
+  "template_id": "d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",\
+  "attachments": [\
+    \{\
+      "content": "<base64csv>",\
+      "filename": "digest_2025-10-28.csv",\
+      "type": "text/csv"\
+    \}\
+  ]\
+\}\
+12. Operator Console (Future)\
+View price history per product.\
+\
+Review supplier-only / Shopify-only products.\
+\
+Manually trigger reconciliation or re-link source_url.\
+\
+13. Acceptance Criteria\
+Area	Criteria\
+Crawling	\uc0\u8805 90 % of supplier product pages discovered nightly\
+Extraction	\uc0\u8805 98 % deterministic success; remaining low-confidence flagged\
+Shopify Sync	100 % of matched products updated correctly\
+Reconciliation	Missing products detected both directions\
+Emails	SendGrid returns 2xx; all sections present with CSV attachments\
+\
+14. Risks & Mitigations\
+Risk	Mitigation\
+Website layout changes	Versioned extractors + fallback schema\
+Shopify metafield not filterable	Ensure adminFilterable enabled at definition\
+URL mismatch	Canonicalize URLs + redirect detection\
+SendGrid limits	Batch personalizations\
+LLM hallucination	Only secondary path, re-validated numerically\
+\
+15. Future Enhancements\
+Auto-relink Shopify metafield when supplier URL redirects.\
+\
+Screenshots in email for major price changes.\
+\
+Operator UI for quarantined changes.\
+\
+Mid-day incremental scans for hot products.\
+\
+16. Implementation Notes\
+Firecrawl v2: use /map, /crawl, /extract with webhooks and NZ location.\
+\
+Supabase Cron: triggers nightly job.\
+\
+Secrets: Shopify token + SendGrid API key stored in Supabase Vault.\
+\
+Money precision: use numeric(12,2), not floats.\
+\
+17. Appendix\
+Canonicalization Rules\
+Force lowercase host.\
+\
+Remove www. prefix.\
+\
+Normalize trailing slashes.\
+\
+Drop tracking parameters (utm_, gclid).\
+\
+Retain path and meaningful query params.\
+\
+Shopify Metafield Definition Example\
+graphql\
+Copy code\
+mutation \{\
+  metafieldDefinitionCreate(definition: \{\
+    name: "Source URL"\
+    namespace: "custom"\
+    key: "source_url"\
+    type: "single_line_text_field"\
+    ownerType: PRODUCT\
+    capabilities: \{\
+      adminFilterable: \{ enabled: true \}\
+    \}\
+  \}) \{\
+    createdDefinition \{ id name \}\
+    userErrors \{ field message \}\
+  \}\
+\}\
+Firecrawl JSON Extraction Schema\
+json\
+Copy code\
+\{\
+  "type": "object",\
+  "properties": \{\
+    "url": \{"type": "string"\},\
+    "sale_price": \{"type": "number"\},\
+    "original_price": \{"type": "number"\},\
+    "currency": \{"type": "string"\}\
+  \},\
+  "required": ["url", "sale_price"]\
+\}}
