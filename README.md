@@ -29,6 +29,7 @@ src/
 ├── database/         # Supabase client & queries
 ├── shopify/          # Shopify GraphQL client & sync logic
 ├── email/            # SendGrid integration & templates
+├── scripts/          # Standalone scripts for testing, verification, etc.
 ├── utils/            # URL canonicalization, logging, etc.
 ├── types/            # TypeScript type definitions
 └── index.ts          # Main orchestration entry point
@@ -70,6 +71,12 @@ src/
 # Run in development mode with hot reload
 npm run dev
 
+# Build the project for production
+npm run build
+
+# Start the production build
+npm run start
+
 # Run manual scrape
 npm run scrape
 
@@ -78,6 +85,21 @@ npm test
 
 # Run tests with coverage
 npm test:coverage
+
+# Run component tests
+npm run test:components
+
+# Verify Shopify integration
+npm run verify:shopify
+
+# Lint the codebase
+npm run lint
+
+# Format the codebase
+npm run format
+
+# Run database migrations
+npm run db:migrate
 ```
 
 ## Deployment
