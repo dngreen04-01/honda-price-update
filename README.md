@@ -11,11 +11,14 @@ Automated supplier website price and offer scraper with Shopify sync and email n
 - **Offer Detection**: Tracks promotional offers and dates
 - **Email Digests**: Comprehensive nightly summaries with CSV attachments
 - **Reconciliation**: Detects supplier-only and Shopify-only products
+- **Internal Dashboard**: React-based monitoring frontend with authentication
 
 ## Tech Stack
 
 - **Backend**: Node.js + TypeScript
+- **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS
 - **Database**: Supabase (PostgreSQL)
+- **Authentication**: Supabase Auth
 - **Scraping**: Firecrawl v2 API
 - **E-commerce**: Shopify GraphQL Admin API
 - **Email**: SendGrid v3 API
@@ -24,15 +27,20 @@ Automated supplier website price and offer scraper with Shopify sync and email n
 ## Project Structure
 
 ```
-src/
-├── scraper/          # Firecrawl integration & price extraction
-├── database/         # Supabase client & queries
-├── shopify/          # Shopify GraphQL client & sync logic
-├── email/            # SendGrid integration & templates
-├── scripts/          # Standalone scripts for testing, verification, etc.
-├── utils/            # URL canonicalization, logging, etc.
-├── types/            # TypeScript type definitions
-└── index.ts          # Main orchestration entry point
+.
+├── src/              # Backend application
+│   ├── scraper/      # Firecrawl integration & price extraction
+│   ├── database/     # Supabase client & queries
+│   ├── shopify/      # Shopify GraphQL client & sync logic
+│   ├── email/        # SendGrid integration & templates
+│   ├── scripts/      # Standalone scripts for testing, verification, etc.
+│   ├── utils/        # URL canonicalization, logging, etc.
+│   ├── types/        # TypeScript type definitions
+│   └── index.ts      # Main orchestration entry point
+└── frontend/         # Internal monitoring dashboard
+    ├── src/          # Frontend React application
+    ├── public/       # Static assets
+    └── README.md     # Frontend setup instructions
 ```
 
 ## Setup
@@ -126,6 +134,30 @@ Products must have `custom.source_url` metafield set to supplier URL for sync to
 - ✅ 100% Shopify sync accuracy for matched products
 - ✅ 2xx SendGrid delivery
 
+## Frontend Dashboard
+
+A lightweight internal monitoring dashboard is available in the `frontend/` directory.
+
+**Features**:
+- Supabase authentication
+- Real-time system metrics
+- Scraping performance by supplier
+- Price change history
+- Shopify sync status
+- Reconciliation tracking
+- Actions requiring attention
+
+**Setup**: See [frontend/README.md](./frontend/README.md) for setup instructions.
+
+**Quick Start**:
+```bash
+cd frontend
+npm install
+cp .env.example .env
+# Edit .env with Supabase credentials
+npm run dev
+```
+
 ## Monitoring
 
 Key metrics tracked:
@@ -133,6 +165,8 @@ Key metrics tracked:
 - Extraction success rate
 - Shopify sync accuracy
 - Email delivery status
+
+All metrics are viewable in the internal dashboard or via email digests.
 
 ## License
 
