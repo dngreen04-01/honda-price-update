@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
 import { scraperOrchestrator } from './scraper/scraper-orchestrator.js';
-import { syncPricesToShopify, refreshShopifyCatalogCache } from './shopify/price-sync.js';
+import { refreshShopifyCatalogCache } from './shopify/price-sync.js';
 import { reconciliationEngine } from './utils/reconciliation.js';
 import { generateDigestData, generateAttachments } from './email/digest-generator.js';
 import { sendgridClient } from './email/sendgrid-client.js';
 import { logger } from './utils/logger.js';
-import { getAllProductPages } from './database/queries.js';
 
 /**
  * Main nightly job orchestration
@@ -24,11 +23,9 @@ async function runNightlyJob(): Promise<void> {
     logger.info('Step 2: Refreshing Shopify catalog cache');
     await refreshShopifyCatalogCache();
 
-    // Step 3: Sync prices to Shopify
-    logger.info('Step 3: Syncing prices to Shopify');
-    const allProducts = await getAllProductPages();
-    const productUrls = allProducts.map(p => p.canonical_url);
-    const syncResult = await syncPricesToShopify(productUrls);
+    // Step 3: Price sync is now manual (via dashboard)
+    logger.info('Step 3: Skipping automatic price sync (manual approval required via dashboard)');
+    const syncResult = { synced: 0, skipped: 0, failed: 0 };
 
     // Step 4: Run reconciliation
     logger.info('Step 4: Running reconciliation');
@@ -66,7 +63,7 @@ async function runNightlyJob(): Promise<void> {
       stats: {
         productsScraped: scrapeStats.totalProducts,
         successfulExtractions: scrapeStats.successfulExtractions,
-        offersFound: scrapeStats.offersFound,
+        failedExtractions: scrapeStats.failedExtractions,
         pricesSynced: syncResult.synced,
         supplierOnly: reconcileResult.supplierOnly.length,
         shopifyOnly: reconcileResult.shopifyOnly.length,
@@ -122,20 +119,72 @@ async function runNightlyJob(): Promise<void> {
   }
 }
 
+/**
+ * Start scheduler mode (keeps server running)
+ */
+async function startScheduler(): Promise<void> {
+  logger.info('Starting in scheduler mode');
+
+  // Parse command line arguments for schedule customization
+  const args = process.argv.slice(2);
+  const scheduleArg = args.find(arg => arg.startsWith('--schedule='));
+  const runOnStart = args.includes('--run-now');
+
+  // Dynamically import scheduler (ES modules)
+  const { JobScheduler } = await import('./scheduler/scheduler.js');
+  const customScheduler = new JobScheduler({
+    schedule: scheduleArg ? scheduleArg.split('=')[1] : '0 2 * * 0', // Default: 2 AM every Sunday (weekly)
+    runOnStart,
+    enabled: true,
+    checkMissedRuns: true, // Check for missed runs on startup
+    scheduleIntervalHours: 168, // 168 hours = 1 week
+  });
+
+  // Start the scheduler (now async to check for missed runs)
+  await customScheduler.start();
+
+  logger.info('Scheduler mode started', {
+    schedule: customScheduler.getConfig().schedule,
+    nextRun: customScheduler.getNextRun(),
+  });
+
+  // Keep process alive
+  process.on('SIGINT', () => {
+    logger.info('Received SIGINT, shutting down gracefully');
+    customScheduler.stop();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', () => {
+    logger.info('Received SIGTERM, shutting down gracefully');
+    customScheduler.stop();
+    process.exit(0);
+  });
+}
+
 // Run if called directly
 // Check if this is the main module (works with both node and tsx)
 const isMainModule = process.argv[1]?.includes('index.ts') || process.argv[1]?.includes('index.js');
 
 if (isMainModule) {
-  runNightlyJob()
-    .then(() => {
-      logger.info('Job completed successfully');
-      process.exit(0);
-    })
-    .catch(error => {
-      logger.error('Job failed', { error: error.message });
-      process.exit(1);
-    });
+  const args = process.argv.slice(2);
+  const mode = args.find(arg => arg.startsWith('--mode='))?.split('=')[1] || 'once';
+
+  if (mode === 'scheduler') {
+    // Scheduler mode: keeps running and executes jobs on schedule
+    startScheduler();
+  } else {
+    // Once mode: run job immediately and exit
+    runNightlyJob()
+      .then(() => {
+        logger.info('Job completed successfully');
+        process.exit(0);
+      })
+      .catch(error => {
+        logger.error('Job failed', { error: error.message });
+        process.exit(1);
+      });
+  }
 }
 
 export { runNightlyJob };

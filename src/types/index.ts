@@ -105,10 +105,13 @@ export interface FirecrawlCrawlResult {
 // Shopify Types
 export interface ShopifyProduct {
   id: string;
+  title: string;
   variants: {
     edges: Array<{
       node: {
         id: string;
+        title?: string;
+        sku?: string;
         price: string;
         compareAtPrice: string | null;
       };
@@ -126,6 +129,7 @@ export interface ShopifyProduct {
 }
 
 export interface ShopifyPriceUpdate {
+  productId: string;
   variantId: string;
   price: string;
   compareAtPrice: string | null;

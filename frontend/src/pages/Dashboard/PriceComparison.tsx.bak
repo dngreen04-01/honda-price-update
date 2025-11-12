@@ -1,0 +1,564 @@
+// @ts-nocheck
+import React, { useEffect, useState, useMemo } from 'react'
+import { supabase } from '../../lib/supabase'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
+import { Input } from '../../components/ui/Input'
+import { ExternalLink, Code, AlertCircle, TrendingDown, TrendingUp, Search, Filter } from 'lucide-react'
+import { format } from 'date-fns'
+
+type FilterType = 'all' | 'not_in_shopify' | 'not_in_supplier' | 'prices_matched' | 'prices_unmatched'
+
+interface PriceComparisonRow {
+  id: string | number
+  canonical_url: string
+  domain_url: string
+
+  // Supplier prices
+  supplier_current_price: number | null
+  supplier_original_price: number | null
+  supplier_html_snippet: string | null
+  supplier_last_seen: string
+
+  // Shopify data
+  shopify_price: number | null
+  shopify_compare_at_price: number | null
+  shopify_product_id: string | null
+  shopify_variant_id: string | null
+  shopify_product_title: string | null
+  shopify_variant_title: string | null
+  shopify_variant_sku: string | null
+  shopify_last_synced: string | null
+
+  // Computed values
+  price_difference: number | null
+  price_difference_percent: number | null
+  has_special_price: boolean
+}
+
+export const PriceComparison: React.FC = () => {
+  const [priceData, setPriceData] = useState<PriceComparisonRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showSnippet, setShowSnippet] = useState<string | number | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [activeFilter, setActiveFilter] = useState<FilterType>('all')
+
+  useEffect(() => {
+    loadPriceComparison()
+  }, [])
+
+  const loadPriceComparison = async () => {
+    try {
+      // Get all product pages with their latest prices
+      const { data: products } = await supabase
+        .from('product_pages')
+        .select(`
+          id,
+          canonical_url,
+          latest_sale_price,
+          latest_original_price,
+          html_snippet,
+          last_seen_at,
+          domains (root_url)
+        `)
+        .not('latest_sale_price', 'is', null)
+        .order('updated_at', { ascending: false })
+
+      // Get Shopify catalog data
+      const { data: shopifyData } = await supabase
+        .from('shopify_catalog_cache')
+        .select('*')
+        .order('product_title', { ascending: true })
+
+      // Create maps for easy lookup
+      const productMap = new Map()
+      products?.forEach(product => {
+        productMap.set(product.canonical_url, product)
+      })
+
+      const shopifyMap = new Map()
+      shopifyData?.forEach(item => {
+        shopifyMap.set(item.source_url_canonical, item)
+      })
+
+      // Get all unique URLs from both sources
+      const allUrls = new Set([
+        ...(products?.map(p => p.canonical_url) || []),
+        ...(shopifyData?.map(s => s.source_url_canonical) || [])
+      ])
+
+      // Combine data from both sources
+      const comparisonData: PriceComparisonRow[] = Array.from(allUrls).map((url, index) => {
+        const product = productMap.get(url)
+        const shopify = shopifyMap.get(url)
+
+        const supplierPrice = product?.latest_sale_price || null
+        const shopifyPrice = shopify?.shopify_price || null
+
+        let priceDiff = null
+        let priceDiffPercent = null
+
+        if (supplierPrice && shopifyPrice) {
+          priceDiff = shopifyPrice - supplierPrice
+          priceDiffPercent = (priceDiff / supplierPrice) * 100
+        }
+
+        // Create a unique ID based on URL to avoid React key conflicts
+        const uniqueId = `row-${index}-${url.split('/').pop() || index}`
+
+        return {
+          id: uniqueId,
+          canonical_url: url,
+          domain_url: (product as any)?.domains?.root_url || '',
+          supplier_current_price: supplierPrice,
+          supplier_original_price: product?.latest_original_price || null,
+          supplier_html_snippet: product?.html_snippet || null,
+          supplier_last_seen: product?.last_seen_at || '',
+          shopify_price: shopifyPrice,
+          shopify_compare_at_price: shopify?.shopify_compare_at_price || null,
+          shopify_product_id: shopify?.shopify_product_id || null,
+          shopify_variant_id: shopify?.shopify_variant_id || null,
+          shopify_product_title: shopify?.product_title || null,
+          shopify_variant_title: shopify?.variant_title || null,
+          shopify_variant_sku: shopify?.variant_sku || null,
+          shopify_last_synced: shopify?.last_synced_at || null,
+          price_difference: priceDiff,
+          price_difference_percent: priceDiffPercent,
+          has_special_price: !!(product?.latest_original_price && product.latest_original_price > (product.latest_sale_price || 0)),
+        }
+      })
+
+      // Sort by: 1) has both prices, 2) product title, 3) URL
+      comparisonData.sort((a, b) => {
+        const aHasBoth = a.supplier_current_price && a.shopify_price ? 1 : 0
+        const bHasBoth = b.supplier_current_price && b.shopify_price ? 1 : 0
+
+        if (bHasBoth !== aHasBoth) return bHasBoth - aHasBoth
+
+        const aTitle = a.shopify_product_title || a.canonical_url
+        const bTitle = b.shopify_product_title || b.canonical_url
+
+        return aTitle.localeCompare(bTitle)
+      })
+
+      setPriceData(comparisonData)
+    } catch (error) {
+      console.error('Error loading price comparison:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Filter data based on search term and filter type
+  const filteredData = useMemo(() => {
+    let data = priceData
+
+    // Apply filter type
+    switch (activeFilter) {
+      case 'not_in_shopify':
+        data = data.filter(row => row.supplier_current_price && !row.shopify_price)
+        break
+      case 'not_in_supplier':
+        data = data.filter(row => !row.supplier_current_price && row.shopify_price)
+        break
+      case 'prices_matched':
+        data = data.filter(row => {
+          if (!row.supplier_current_price || !row.shopify_price) return false
+          // Consider prices matched if they're within $0.01
+          return Math.abs(row.price_difference || 0) <= 0.01
+        })
+        break
+      case 'prices_unmatched':
+        data = data.filter(row => {
+          if (!row.supplier_current_price || !row.shopify_price) return false
+          // Prices are unmatched if difference is greater than $0.01
+          return Math.abs(row.price_difference || 0) > 0.01
+        })
+        break
+      case 'all':
+      default:
+        // No filter, show all data
+        break
+    }
+
+    // Apply search term filter
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase()
+      data = data.filter(row => {
+        return (
+          row.canonical_url?.toLowerCase().includes(term) ||
+          row.shopify_product_title?.toLowerCase().includes(term) ||
+          row.shopify_variant_title?.toLowerCase().includes(term) ||
+          row.shopify_variant_sku?.toLowerCase().includes(term)
+        )
+      })
+    }
+
+    return data
+  }, [priceData, searchTerm, activeFilter])
+
+  // Calculate stats for all data (not filtered)
+  const allStats = useMemo(() => {
+    const notInShopify = priceData.filter(r => r.supplier_current_price && !r.shopify_price).length
+    const notInSupplier = priceData.filter(r => !r.supplier_current_price && r.shopify_price).length
+    const pricesMatched = priceData.filter(r => {
+      if (!r.supplier_current_price || !r.shopify_price) return false
+      return Math.abs(r.price_difference || 0) <= 0.01
+    }).length
+    const pricesUnmatched = priceData.filter(r => {
+      if (!r.supplier_current_price || !r.shopify_price) return false
+      return Math.abs(r.price_difference || 0) > 0.01
+    }).length
+    return { notInShopify, notInSupplier, pricesMatched, pricesUnmatched, total: priceData.length }
+  }, [priceData])
+
+  const getShopifyUrl = (productId: string, variantId: string) => {
+    // Replace with your actual Shopify store URL
+    const storeUrl = 'https://supermoto-honda-parts.myshopify.com'
+    return `${storeUrl}/admin/products/${productId.replace('gid://shopify/Product/', '')}`
+  }
+
+  const toggleSnippet = (id: string | number) => {
+    setShowSnippet(showSnippet === id ? null : id)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent"></div>
+          <p className="mt-2 text-sm text-muted-foreground">Loading price comparison...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold">Price Comparison</h1>
+        <p className="text-muted-foreground">
+          Compare supplier prices with Shopify catalog prices
+        </p>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Supplier vs Shopify Price Comparison</CardTitle>
+          <CardDescription>
+            {filteredData.length} of {allStats.total} products shown
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {/* Filter Buttons */}
+          <div className="mb-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Filter className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">Filter by:</span>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <button
+                onClick={() => setActiveFilter('all')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeFilter === 'all'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                All Products
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-white/20">
+                  {allStats.total}
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveFilter('not_in_shopify')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeFilter === 'not_in_shopify'
+                    ? 'bg-orange-600 text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                Not In Shopify
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-white/20">
+                  {allStats.notInShopify}
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveFilter('not_in_supplier')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeFilter === 'not_in_supplier'
+                    ? 'bg-purple-600 text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                Not In Supplier
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-white/20">
+                  {allStats.notInSupplier}
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveFilter('prices_matched')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeFilter === 'prices_matched'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                Prices Matched
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-white/20">
+                  {allStats.pricesMatched}
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveFilter('prices_unmatched')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  activeFilter === 'prices_unmatched'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                }`}
+              >
+                Prices Unmatched
+                <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-white/20">
+                  {allStats.pricesUnmatched}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* Search Box */}
+          <div className="mb-6">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Search by URL, Product Title, Variant Title, or SKU..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            {searchTerm && (
+              <p className="text-sm text-muted-foreground mt-2">
+                Showing {filteredData.length} result{filteredData.length !== 1 ? 's' : ''}
+              </p>
+            )}
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left p-3 font-medium">Product</th>
+                  <th className="text-left p-3 font-medium">SKU</th>
+                  <th className="text-right p-3 font-medium">Supplier Price</th>
+                  <th className="text-right p-3 font-medium">Special Price</th>
+                  <th className="text-right p-3 font-medium">Shopify Price</th>
+                  <th className="text-right p-3 font-medium">Difference</th>
+                  <th className="text-center p-3 font-medium">Code Snippet</th>
+                  <th className="text-center p-3 font-medium">Last Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredData.length > 0 ? (
+                  filteredData.map((row) => (
+                    <React.Fragment key={row.id}>
+                      <tr className="border-b hover:bg-gray-50 dark:hover:bg-gray-800">
+                        {/* Product Info */}
+                        <td className="p-3">
+                          <div className="space-y-1">
+                            {row.shopify_product_title && (
+                              <p className="font-medium text-sm">{row.shopify_product_title}</p>
+                            )}
+                            {row.shopify_variant_title && row.shopify_variant_title !== row.shopify_product_title && (
+                              <p className="text-xs text-muted-foreground">{row.shopify_variant_title}</p>
+                            )}
+                            <a
+                              href={row.canonical_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 text-xs max-w-xs truncate"
+                              title={row.canonical_url}
+                            >
+                              <span className="truncate">{row.canonical_url}</span>
+                              <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                            </a>
+                          </div>
+                        </td>
+
+                        {/* SKU */}
+                        <td className="p-3">
+                          {row.shopify_variant_sku ? (
+                            <span className="font-mono text-sm bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded">
+                              {row.shopify_variant_sku}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">—</span>
+                          )}
+                        </td>
+
+                        {/* Supplier Current Price */}
+                        <td className="p-3 text-right">
+                          {row.supplier_current_price ? (
+                            <a
+                              href={row.canonical_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 inline-flex items-center gap-1 font-semibold"
+                              title="Click to view on supplier website"
+                            >
+                              ${row.supplier_current_price.toFixed(2)}
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ) : (
+                            <span className="text-muted-foreground">N/A</span>
+                          )}
+                        </td>
+
+                        {/* Special Price (Original Price if different) */}
+                        <td className="p-3 text-right">
+                          {row.has_special_price && row.supplier_original_price ? (
+                            <div className="flex flex-col items-end">
+                              <span className="text-sm line-through text-muted-foreground">
+                                ${row.supplier_original_price.toFixed(2)}
+                              </span>
+                              <span className="text-xs text-green-600 font-medium flex items-center gap-1">
+                                <TrendingDown className="h-3 w-3" />
+                                Sale!
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">—</span>
+                          )}
+                        </td>
+
+                        {/* Shopify Price */}
+                        <td className="p-3 text-right">
+                          {row.shopify_price && row.shopify_product_id ? (
+                            <div className="flex flex-col items-end">
+                              <a
+                                href={getShopifyUrl(row.shopify_product_id, row.shopify_variant_id || '')}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-purple-600 hover:text-purple-800 dark:text-purple-400 dark:hover:text-purple-300 inline-flex items-center gap-1 font-semibold"
+                                title="Click to view in Shopify admin"
+                              >
+                                ${row.shopify_price.toFixed(2)}
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                              {row.shopify_compare_at_price && (
+                                <span className="text-xs line-through text-muted-foreground">
+                                  was ${row.shopify_compare_at_price.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground flex items-center gap-1 justify-end">
+                              <AlertCircle className="h-3 w-3" />
+                              Not in Shopify
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Price Difference */}
+                        <td className="p-3 text-right">
+                          {row.price_difference !== null && row.price_difference_percent !== null ? (
+                            <div className="flex flex-col items-end">
+                              <span
+                                className={`font-medium ${
+                                  row.price_difference > 0
+                                    ? 'text-red-600'
+                                    : row.price_difference < 0
+                                    ? 'text-green-600'
+                                    : 'text-gray-600'
+                                }`}
+                              >
+                                {row.price_difference > 0 ? '+' : ''}
+                                ${row.price_difference.toFixed(2)}
+                              </span>
+                              <span
+                                className={`text-xs flex items-center gap-1 ${
+                                  row.price_difference > 0
+                                    ? 'text-red-600'
+                                    : row.price_difference < 0
+                                    ? 'text-green-600'
+                                    : 'text-gray-600'
+                                }`}
+                              >
+                                {row.price_difference > 0 ? (
+                                  <TrendingUp className="h-3 w-3" />
+                                ) : row.price_difference < 0 ? (
+                                  <TrendingDown className="h-3 w-3" />
+                                ) : null}
+                                {row.price_difference_percent > 0 ? '+' : ''}
+                                {row.price_difference_percent.toFixed(1)}%
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+
+                        {/* Code Snippet Button */}
+                        <td className="p-3 text-center">
+                          {row.supplier_html_snippet ? (
+                            <button
+                              onClick={() => toggleSnippet(row.id)}
+                              className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                              title="View HTML snippet where price was detected"
+                            >
+                              <Code className="h-4 w-4" />
+                              {showSnippet === row.id ? 'Hide' : 'Show'}
+                            </button>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">—</span>
+                          )}
+                        </td>
+
+                        {/* Last Updated */}
+                        <td className="p-3 text-center text-xs text-muted-foreground">
+                          <div>
+                            {row.supplier_last_seen ? (
+                              <p>Supplier: {format(new Date(row.supplier_last_seen), 'PP')}</p>
+                            ) : (
+                              <p>Supplier: —</p>
+                            )}
+                            {row.shopify_last_synced && (
+                              <p className="mt-1">Shopify: {format(new Date(row.shopify_last_synced), 'PP')}</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Code Snippet Row (Expandable) */}
+                      {showSnippet === row.id && row.supplier_html_snippet && (
+                        <tr className="border-b bg-gray-50 dark:bg-gray-900">
+                          <td colSpan={8} className="p-4">
+                            <div>
+                              <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                                <Code className="h-4 w-4" />
+                                HTML Snippet (where price was detected)
+                              </p>
+                              <pre className="bg-gray-100 dark:bg-gray-800 p-3 rounded-lg overflow-x-auto text-xs">
+                                <code>{row.supplier_html_snippet}</code>
+                              </pre>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="p-8 text-center text-muted-foreground">
+                      {searchTerm ? 'No results found' : 'No price data available'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}

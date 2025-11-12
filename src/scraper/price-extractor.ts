@@ -2,6 +2,7 @@ import { JSDOM } from 'jsdom';
 import { ExtractedPrice } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { firecrawlClient } from './firecrawl-client.js';
+import { extractPriceFromHtml } from './honda-selectors.js';
 
 /**
  * Price extraction from HTML using multiple strategies
@@ -11,8 +12,8 @@ export class PriceExtractor {
    * Main extraction method - tries deterministic first, falls back to LLM
    */
   async extract(url: string, html: string): Promise<ExtractedPrice> {
-    // Try deterministic extraction first
-    const deterministicResult = this.extractDeterministic(html);
+    // Try deterministic extraction first (now with URL for Honda-specific selectors)
+    const deterministicResult = this.extractDeterministic(html, url);
 
     if (deterministicResult.salePrice !== null && deterministicResult.confidence === 'high') {
       logger.debug('Deterministic extraction successful', { url });
@@ -26,6 +27,21 @@ export class PriceExtractor {
     logger.info('Falling back to LLM extraction', { url });
     try {
       const llmResult = await this.extractWithLLM(url);
+
+      // Validate LLM result for anomalies
+      const validated = this.validatePrice(llmResult.salePrice, url);
+      if (!validated.isValid) {
+        logger.warn('LLM price appears anomalous, using deterministic result', {
+          url,
+          llmPrice: llmResult.salePrice,
+          reason: validated.reason,
+        });
+        return {
+          ...deterministicResult,
+          source: 'deterministic',
+        };
+      }
+
       return {
         ...llmResult,
         source: 'llm',
@@ -45,23 +61,31 @@ export class PriceExtractor {
   /**
    * Deterministic extraction using structured data and DOM parsing
    */
-  private extractDeterministic(html: string): Omit<ExtractedPrice, 'source'> {
+  private extractDeterministic(html: string, url?: string): Omit<ExtractedPrice, 'source'> {
     const dom = new JSDOM(html);
     const document = dom.window.document;
 
-    // Strategy 1: JSON-LD structured data
+    // Strategy 1: Honda-specific selectors (highest priority for Honda domains)
+    if (url) {
+      const hondaResult = this.extractFromHondaSelectors(html, url);
+      if (hondaResult.salePrice !== null && hondaResult.confidence === 'high') {
+        return hondaResult;
+      }
+    }
+
+    // Strategy 2: JSON-LD structured data
     const jsonLdResult = this.extractFromJsonLd(document);
     if (jsonLdResult.salePrice !== null) {
       return jsonLdResult;
     }
 
-    // Strategy 2: Microdata and meta tags
+    // Strategy 3: Microdata and meta tags
     const microdataResult = this.extractFromMicrodata(document);
     if (microdataResult.salePrice !== null) {
       return microdataResult;
     }
 
-    // Strategy 3: Common CSS selectors
+    // Strategy 4: Common CSS selectors
     const domResult = this.extractFromDOM(document);
     return domResult;
   }
@@ -269,7 +293,7 @@ export class PriceExtractor {
       originalPrice: result.data.originalPrice || null,
       currency: result.data.currency || 'NZD',
       confidence: 'low',
-      htmlSnippet: null,
+      htmlSnippet: undefined,
     };
   }
 
@@ -327,6 +351,77 @@ export class PriceExtractor {
   }
 
   /**
+   * Extract using Honda-specific selectors
+   */
+  private extractFromHondaSelectors(html: string, url: string): Omit<ExtractedPrice, 'source'> {
+    try {
+      const result = extractPriceFromHtml(html, url);
+
+      if (result.salePrice !== null) {
+        // Get HTML snippet for debugging
+        const dom = new JSDOM(html);
+        const document = dom.window.document;
+        const priceElements = document.querySelectorAll('.price, .product-price, [itemprop="price"]');
+        let snippet = '';
+
+        for (const el of Array.from(priceElements)) {
+          const text = el.textContent?.trim();
+          if (text && text.includes(result.salePrice.toString())) {
+            snippet = el.outerHTML.substring(0, 500);
+            break;
+          }
+        }
+
+        return {
+          salePrice: result.salePrice,
+          originalPrice: result.originalPrice,
+          currency: 'NZD',
+          confidence: result.confidence >= 0.7 ? 'high' : 'low',
+          htmlSnippet: snippet || undefined,
+        };
+      }
+    } catch (error) {
+      logger.debug('Honda selector extraction failed', {
+        url,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    return this.emptyResult();
+  }
+
+  /**
+   * Validate price for anomalies
+   */
+  private validatePrice(
+    price: number | null,
+    url: string
+  ): { isValid: boolean; reason?: string } {
+    if (price === null) {
+      return { isValid: false, reason: 'Price is null' };
+    }
+
+    // Check for unrealistic prices
+    if (price < 1) {
+      return { isValid: false, reason: 'Price too low (< $1)' };
+    }
+
+    if (price > 50000) {
+      return { isValid: false, reason: 'Price too high (> $50,000)' };
+    }
+
+    // Check for suspiciously round numbers that might be meta content
+    // e.g., $1000, $1049 when actual price is $44
+    const priceStr = price.toString();
+    if (price > 100 && priceStr.endsWith('00') && !priceStr.endsWith('.00')) {
+      logger.warn('Suspicious round price detected', { url, price });
+      // Don't reject, but flag for review
+    }
+
+    return { isValid: true };
+  }
+
+  /**
    * Empty result helper
    */
   private emptyResult(): Omit<ExtractedPrice, 'source'> {
@@ -335,7 +430,7 @@ export class PriceExtractor {
       originalPrice: null,
       currency: 'NZD',
       confidence: 'low',
-      htmlSnippet: null,
+      htmlSnippet: undefined,
     };
   }
 }

@@ -19,11 +19,15 @@ const TRACKING_PARAMS = [
 
 /**
  * Canonicalizes a URL by:
- * 1. Converting to lowercase host
+ * 1. Converting hostname to lowercase
  * 2. Removing 'www.' prefix
- * 3. Normalizing trailing slashes
- * 4. Removing tracking parameters
- * 5. Sorting remaining query parameters
+ * 3. Normalizing protocol to https
+ * 4. Converting pathname to lowercase
+ * 5. Removing trailing slashes (except root '/')
+ * 6. Removing tracking parameters (utm_*, gclid, etc.)
+ * 7. Sorting remaining query parameters alphabetically
+ *
+ * This ensures consistent URL matching between scraper and Shopify metafields
  */
 export function canonicalizeUrl(url: string): string {
   try {
@@ -35,8 +39,8 @@ export function canonicalizeUrl(url: string): string {
       host = host.substring(4);
     }
 
-    // Remove trailing slash from pathname (unless it's just '/')
-    let pathname = urlObj.pathname;
+    // Lowercase pathname and remove trailing slash (unless it's just '/')
+    let pathname = urlObj.pathname.toLowerCase();
     if (pathname.length > 1 && pathname.endsWith('/')) {
       pathname = pathname.slice(0, -1);
     }
@@ -54,8 +58,8 @@ export function canonicalizeUrl(url: string): string {
     // Sort parameters for consistency
     filteredParams.sort();
 
-    // Reconstruct URL
-    const canonicalUrl = new URL(pathname, `${urlObj.protocol}//${host}`);
+    // Reconstruct URL with https protocol
+    const canonicalUrl = new URL(pathname, `https://${host}`);
     canonicalUrl.search = filteredParams.toString();
 
     // Add hash if present

@@ -157,6 +157,9 @@ export interface Database {
           source_url_canonical: string
           shopify_price: number | null
           shopify_compare_at_price: number | null
+          product_title: string | null
+          variant_title: string | null
+          variant_sku: string | null
           last_synced_at: string
           created_at: string
           updated_at: string
@@ -168,6 +171,9 @@ export interface Database {
           source_url_canonical: string
           shopify_price?: number | null
           shopify_compare_at_price?: number | null
+          product_title?: string | null
+          variant_title?: string | null
+          variant_sku?: string | null
           last_synced_at?: string
           created_at?: string
           updated_at?: string
@@ -179,6 +185,9 @@ export interface Database {
           source_url_canonical?: string
           shopify_price?: number | null
           shopify_compare_at_price?: number | null
+          product_title?: string | null
+          variant_title?: string | null
+          variant_sku?: string | null
           last_synced_at?: string
           created_at?: string
           updated_at?: string
