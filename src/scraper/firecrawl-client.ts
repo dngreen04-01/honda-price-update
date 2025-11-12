@@ -54,10 +54,40 @@ export class FirecrawlClient {
         links: response.data.links || [],
       };
     } catch (error) {
-      logger.error('Firecrawl Map failed', {
-        url,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        const statusText = error.response?.statusText;
+        const errorData = error.response?.data;
+
+        if (status === 402) {
+          logger.error('Firecrawl API credits exhausted', {
+            url,
+            status,
+            message: 'Payment Required - Please add credits to your Firecrawl account',
+            details: errorData,
+          });
+        } else if (status === 429) {
+          logger.error('Firecrawl API rate limit exceeded', {
+            url,
+            status,
+            message: 'Too Many Requests - Please wait before retrying',
+            details: errorData,
+          });
+        } else {
+          logger.error('Firecrawl Map failed', {
+            url,
+            status,
+            statusText,
+            error: error.message,
+            details: errorData,
+          });
+        }
+      } else {
+        logger.error('Firecrawl Map failed', {
+          url,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       throw error;
     }
   }

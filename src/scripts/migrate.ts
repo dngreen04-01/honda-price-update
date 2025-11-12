@@ -57,7 +57,7 @@ async function runMigrations(): Promise<void> {
     logger.info('Database migrations completed');
 
     // Verify tables exist
-    const { data: tables, error: tablesError } = await supabase
+    const { error: tablesError } = await supabase
       .from('domains')
       .select('id')
       .limit(1);

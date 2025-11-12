@@ -206,7 +206,10 @@ export async function upsertShopifyCatalogCache(
   shopifyVariantId: string,
   sourceUrlCanonical: string,
   shopifyPrice: number,
-  shopifyCompareAtPrice: number | null
+  shopifyCompareAtPrice: number | null,
+  productTitle?: string,
+  variantTitle?: string,
+  variantSku?: string
 ): Promise<ShopifyCatalogCache> {
   const { data, error } = await supabase
     .from('shopify_catalog_cache')
@@ -217,6 +220,9 @@ export async function upsertShopifyCatalogCache(
         source_url_canonical: sourceUrlCanonical,
         shopify_price: shopifyPrice,
         shopify_compare_at_price: shopifyCompareAtPrice,
+        product_title: productTitle,
+        variant_title: variantTitle,
+        variant_sku: variantSku,
         last_synced_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       },
@@ -248,6 +254,52 @@ export async function getShopifyCatalogCache(): Promise<ShopifyCatalogCache[]> {
   }
 
   return data as ShopifyCatalogCache[];
+}
+
+export async function getShopifyProductUrls(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('shopify_catalog_cache')
+    .select('source_url_canonical')
+    .not('source_url_canonical', 'is', null);
+
+  if (error) {
+    logger.error('Failed to fetch Shopify product URLs', { error: error.message });
+    throw error;
+  }
+
+  // Return as Set for fast lookup
+  return new Set(data.map(row => row.source_url_canonical));
+}
+
+export async function updateScrapedPrices(
+  sourceUrlCanonical: string,
+  scrapedSalePrice: number | null,
+  scrapedOriginalPrice: number | null,
+  scrapeConfidence: number
+): Promise<void> {
+  const { error } = await supabase
+    .from('shopify_catalog_cache')
+    .update({
+      scraped_sale_price: scrapedSalePrice,
+      scraped_original_price: scrapedOriginalPrice,
+      scrape_confidence: scrapeConfidence,
+      last_scraped_at: new Date().toISOString(),
+    })
+    .eq('source_url_canonical', sourceUrlCanonical);
+
+  if (error) {
+    logger.error('Failed to update scraped prices', {
+      error: error.message,
+      sourceUrlCanonical,
+    });
+    throw error;
+  }
+
+  logger.debug('Scraped prices updated', {
+    sourceUrlCanonical,
+    scrapedSalePrice,
+    scrapeConfidence,
+  });
 }
 
 export async function getShopifyCatalogByUrl(
@@ -310,4 +362,74 @@ export async function getReconcileResults(runId: string): Promise<ReconcileResul
   }
 
   return data as ReconcileResult[];
+}
+
+// Archive Functions
+export async function archiveProductByUrl(
+  canonicalUrl: string,
+  reason: string = 'discontinued'
+): Promise<void> {
+  const { error } = await supabase
+    .from('product_pages')
+    .update({
+      archived: true,
+      archived_at: new Date().toISOString(),
+      archive_reason: reason,
+    })
+    .eq('canonical_url', canonicalUrl);
+
+  if (error) {
+    logger.error('Failed to archive product', { error: error.message, canonicalUrl });
+    throw error;
+  }
+
+  logger.info('Product archived', { canonicalUrl, reason });
+}
+
+export async function unarchiveProductByUrl(canonicalUrl: string): Promise<void> {
+  const { error } = await supabase
+    .from('product_pages')
+    .update({
+      archived: false,
+      archived_at: null,
+      archive_reason: null,
+    })
+    .eq('canonical_url', canonicalUrl);
+
+  if (error) {
+    logger.error('Failed to unarchive product', { error: error.message, canonicalUrl });
+    throw error;
+  }
+
+  logger.info('Product unarchived', { canonicalUrl });
+}
+
+export async function getArchivedProducts(): Promise<ProductPage[]> {
+  const { data, error } = await supabase
+    .from('product_pages')
+    .select('*')
+    .eq('archived', true)
+    .order('archived_at', { ascending: false });
+
+  if (error) {
+    logger.error('Failed to fetch archived products', { error: error.message });
+    throw error;
+  }
+
+  return data as ProductPage[];
+}
+
+export async function getActiveProducts(): Promise<ProductPage[]> {
+  const { data, error } = await supabase
+    .from('product_pages')
+    .select('*')
+    .eq('archived', false)
+    .order('last_seen_at', { ascending: false });
+
+  if (error) {
+    logger.error('Failed to fetch active products', { error: error.message });
+    throw error;
+  }
+
+  return data as ProductPage[];
 }

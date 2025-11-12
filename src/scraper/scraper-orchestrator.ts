@@ -1,387 +1,175 @@
-import { firecrawlClient } from './firecrawl-client.js';
-import { priceExtractor } from './price-extractor.js';
-import { getActiveDomains, upsertProductPage, insertPriceHistory, upsertOffer } from '../database/queries.js';
-import { canonicalizeUrl, isDomainMatch } from '../utils/canonicalize.js';
+import { getShopifyCatalogCache, updateScrapedPrices } from '../database/queries.js';
 import { logger } from '../utils/logger.js';
-import { ScrapedProduct } from '../types/index.js';
+import { puppeteerClient } from './puppeteer-client.js';
+import { canonicalizeUrl } from '../utils/canonicalize.js';
 
 /**
- * Main scraper orchestrator
+ * Simplified scraper orchestrator
+ *
+ * Strategy: Scrape URLs directly from Shopify catalog
+ * - Source: shopify_catalog_cache.source_url_canonical
+ * - These are products that exist in Shopify with custom.source_url metafield
+ * - No discovery needed - just scrape known URLs
  */
 export class ScraperOrchestrator {
   /**
-   * Discover product URLs on a domain
+   * Scrape products from Shopify catalog
    */
-  async discoverProducts(domainUrl: string): Promise<string[]> {
-    logger.info('Discovering products', { domainUrl });
-
-    try {
-      // Use Firecrawl Map to discover all URLs
-      const mapResult = await firecrawlClient.map(domainUrl, {
-        search: 'product',
-        limit: 5000,
-      });
-
-      if (!mapResult.success) {
-        throw new Error('Firecrawl Map failed');
-      }
-
-      // Filter for product pages
-      // Honda sites use simple slug-based URLs: domain.com/{slug}
-      // Exclude: pages with multiple path segments, system pages, category pages
-      const productUrls = mapResult.links.filter(url => {
-        if (!isDomainMatch(url, domainUrl)) {
-          return false;
-        }
-
-        try {
-          const urlObj = new URL(url);
-          const pathname = urlObj.pathname;
-
-          // Exclude system/utility pages
-          const excludePatterns = [
-            '/cart',
-            '/checkout',
-            '/account',
-            '/search',
-            '/collections',
-            '/pages',
-            '/blogs',
-            '/blog',
-            '/news',
-            '/about',
-            '/contact',
-            '/category',
-            '/categories',
-            '/terms',
-            '/privacy',
-            '/shipping',
-            '/returns',
-            '/offers',
-            '/recalls',
-            '/product-enquiry',
-            '/warranty',
-            '/honda-advantage',
-            '/store',
-            '/part-',
-            '/bike-servicing-repairs',
-            '/bikes-accessories',
-            '/trailers-machinery',
-          ];
-
-          // Also exclude "category-like" single-word paths (common on Honda sites)
-          const categoryLikePaths = [
-            'cordless',
-            'generators',
-            'versatool',
-            'lawnmowers',
-            'brushcutters',
-            'outboards',
-            'motorcycles',
-            'scooters',
-            'cruiser-bikes',
-            'adventure-bikes',
-            'touring-bikes',
-            'sport-bikes',
-            'naked-bikes',
-            'off-road-bikes',
-          ];
-
-          const excludeMatch = excludePatterns.find(pattern => pathname.includes(pattern));
-          if (excludeMatch) {
-            return false;
-          }
-
-          // Include: simple product URLs with single path segment
-          // e.g., /gb350, /bf40, /eu70is-32amp-plug-with-auto-start
-          // Also include: /honda-genuine-accessories/{sku}
-          const pathSegments = pathname.split('/').filter(s => s.length > 0);
-
-          // Exclude category-like paths (single segment that looks like a category)
-          if (pathSegments.length === 1 && categoryLikePaths.includes(pathSegments[0])) {
-            return false;
-          }
-
-          // Accept URLs with 1 or 2 path segments (e.g., /product or /category/product)
-          if (pathSegments.length >= 1 && pathSegments.length <= 2) {
-            return true;
-          }
-
-          return false;
-        } catch (error) {
-          return false;
-        }
-      });
-
-      logger.info('Product discovery completed', {
-        domainUrl,
-        totalUrls: mapResult.links.length,
-        productUrls: productUrls.length,
-      });
-
-      return productUrls;
-    } catch (error) {
-      logger.error('Product discovery failed', {
-        domainUrl,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Scrape products from a list of URLs
-   */
-  async scrapeProducts(urls: string[]): Promise<ScrapedProduct[]> {
-    logger.info('Scraping products', { count: urls.length });
-
-    const scrapedProducts: ScrapedProduct[] = [];
-
-    // Batch scrape URLs
-    const scrapeResults = await firecrawlClient.batchScrape(urls, {
-      formats: ['html'],
-      onlyMainContent: true,
+  async scrapeProducts(urls: string[], options: { concurrency?: number } = {}): Promise<Array<{
+    url: string;
+    success: boolean;
+    salePrice: number | null;
+    originalPrice: number | null;
+    confidence: number;
+  }>> {
+    logger.info('Scraping products with Bright Data', {
+      count: urls.length,
+      concurrency: options.concurrency || 3,
     });
 
-    for (const result of scrapeResults) {
-      if (!result.success) {
-        logger.warn('Failed to scrape product', { url: result.url, error: result.error });
-        continue;
+    const results = await puppeteerClient.scrapeUrls(urls, options);
+
+    const processedResults = results.map(result => {
+      if (result.success && result.html) {
+        const priceResult = puppeteerClient.extractPrice(result.url, result.html);
+
+        return {
+          url: result.url,
+          success: true,
+          salePrice: priceResult.salePrice,
+          originalPrice: priceResult.originalPrice,
+          confidence: priceResult.confidence,
+        };
       }
 
-      try {
-        // Extract price
-        const extractedPrice = await priceExtractor.extract(result.url, result.html);
-
-        // Canonicalize URL
-        const canonicalUrl = canonicalizeUrl(result.url);
-
-        scrapedProducts.push({
-          url: result.url,
-          canonicalUrl,
-          extractedPrice,
-        });
-
-        logger.debug('Product scraped successfully', {
-          url: result.url,
-          canonicalUrl,
-          salePrice: extractedPrice.salePrice,
-          confidence: extractedPrice.confidence,
-          source: extractedPrice.source,
-        });
-      } catch (error) {
-        logger.error('Failed to extract price', {
-          url: result.url,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    logger.info('Product scraping completed', {
-      total: urls.length,
-      successful: scrapedProducts.length,
-      failed: urls.length - scrapedProducts.length,
+      return {
+        url: result.url,
+        success: false,
+        salePrice: null,
+        originalPrice: null,
+        confidence: 0,
+      };
     });
 
-    return scrapedProducts;
+    return processedResults;
   }
 
   /**
    * Store scraped products in database
    */
-  async storeProducts(domainId: number, products: ScrapedProduct[]): Promise<void> {
-    logger.info('Storing scraped products', { domainId, count: products.length });
+  async storeProducts(products: Array<{
+    url: string;
+    success: boolean;
+    salePrice: number | null;
+    originalPrice: number | null;
+    confidence: number;
+  }>): Promise<void> {
+    logger.info('Storing scraped products', { count: products.length });
 
     for (const product of products) {
+      if (!product.success) {
+        continue;
+      }
+
       try {
-        // Upsert product page
-        const productPage = await upsertProductPage(
-          domainId,
-          product.canonicalUrl,
-          product.extractedPrice.salePrice,
-          product.extractedPrice.originalPrice,
-          product.extractedPrice.currency,
-          product.extractedPrice.confidence,
-          product.extractedPrice.htmlSnippet || null
+        // Canonicalize URL for database matching (removes www.)
+        const canonicalUrl = canonicalizeUrl(product.url);
+
+        // Update shopify_catalog_cache with scraped prices
+        await updateScrapedPrices(
+          canonicalUrl,
+          product.salePrice,
+          product.originalPrice,
+          product.confidence
         );
 
-        // Insert price history
-        await insertPriceHistory(
-          productPage.id,
-          product.extractedPrice.salePrice,
-          product.extractedPrice.originalPrice,
-          product.extractedPrice.currency,
-          product.extractedPrice.source,
-          product.extractedPrice.confidence,
-          product.extractedPrice.htmlSnippet || null
-        );
-
-        logger.debug('Product stored', {
-          productPageId: productPage.id,
-          canonicalUrl: product.canonicalUrl,
+        logger.info('Product scraped and stored', {
+          url: product.url,
+          canonicalUrl,
+          salePrice: product.salePrice,
+          originalPrice: product.originalPrice,
+          confidence: product.confidence,
         });
+
       } catch (error) {
         logger.error('Failed to store product', {
-          canonicalUrl: product.canonicalUrl,
+          url: product.url,
           error: error instanceof Error ? error.message : String(error),
         });
       }
     }
 
-    logger.info('Product storage completed', { domainId, count: products.length });
+    logger.info('Product storage completed', { count: products.length });
   }
 
   /**
-   * Scrape offers from a domain
+   * Run complete scrape for all Shopify products
    */
-  async scrapeOffers(domainId: number, domainUrl: string): Promise<number> {
-    logger.info('Scraping offers', { domainId, domainUrl });
-
-    try {
-      // Common offer page paths
-      const offerPaths = [
-        '/offers',
-        '/promotions',
-        '/deals',
-        '/specials',
-        '/sale',
-      ];
-
-      let offersFound = 0;
-
-      for (const path of offerPaths) {
-        const offerUrl = `${domainUrl}${path}`;
-
-        try {
-          const scrapeResult = await firecrawlClient.scrape(offerUrl);
-
-          if (!scrapeResult.success) {
-            continue;
-          }
-
-          // Extract offers using LLM
-          const extractResult = await firecrawlClient.extract<{
-            offers: Array<{
-              title: string;
-              summary?: string;
-              startDate?: string;
-              endDate?: string;
-              url: string;
-            }>;
-          }>(offerUrl, {
-            type: 'object',
-            properties: {
-              offers: {
-                type: 'array',
-                items: {
-                  type: 'object',
-                  properties: {
-                    title: { type: 'string' },
-                    summary: { type: 'string' },
-                    startDate: { type: 'string' },
-                    endDate: { type: 'string' },
-                    url: { type: 'string' },
-                  },
-                  required: ['title', 'url'],
-                },
-              },
-            },
-          }, {
-            prompt: 'Extract promotional offers with titles, summaries, dates, and URLs',
-          });
-
-          if (extractResult.success && extractResult.data.offers) {
-            for (const offer of extractResult.data.offers) {
-              await upsertOffer(
-                domainId,
-                offer.title,
-                offer.summary || null,
-                offer.startDate || null,
-                offer.endDate || null,
-                offer.url
-              );
-              offersFound++;
-            }
-          }
-        } catch (error) {
-          logger.debug('Offer page not found or failed', { offerUrl });
-        }
-      }
-
-      logger.info('Offer scraping completed', { domainId, offersFound });
-
-      return offersFound;
-    } catch (error) {
-      logger.error('Failed to scrape offers', {
-        domainId,
-        domainUrl,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return 0;
-    }
-  }
-
-  /**
-   * Run complete scrape for all active domains
-   */
-  async runFullScrape(): Promise<{
+  async runFullScrape(options: { concurrency?: number } = {}): Promise<{
     totalProducts: number;
     successfulExtractions: number;
-    offersFound: number;
+    failedExtractions: number;
   }> {
-    logger.info('Starting full scrape');
+    logger.info('Starting full scrape from Shopify catalog');
 
-    const domains = await getActiveDomains();
-    let totalProducts = 0;
-    let successfulExtractions = 0;
-    let offersFound = 0;
+    // 1. Load all Shopify products with source URLs
+    const shopifyProducts = await getShopifyCatalogCache();
 
-    for (const domain of domains) {
-      try {
-        logger.info('Processing domain', { domainId: domain.id, rootUrl: domain.root_url });
+    // 2. Filter products that have source URLs
+    const productsWithUrls = shopifyProducts.filter(p => p.source_url_canonical);
 
-        // 1. Discover products
-        const productUrls = await this.discoverProducts(domain.root_url);
-        totalProducts += productUrls.length;
+    logger.info('Shopify products loaded', {
+      total: shopifyProducts.length,
+      withUrls: productsWithUrls.length,
+      withoutUrls: shopifyProducts.length - productsWithUrls.length,
+    });
 
-        // 2. Scrape products
-        const scrapedProducts = await this.scrapeProducts(productUrls);
-        successfulExtractions += scrapedProducts.length;
-
-        // 3. Store products
-        await this.storeProducts(domain.id, scrapedProducts);
-
-        // 4. Scrape offers
-        const domainOffers = await this.scrapeOffers(domain.id, domain.root_url);
-        offersFound += domainOffers;
-
-        logger.info('Domain processing completed', {
-          domainId: domain.id,
-          products: scrapedProducts.length,
-          offers: domainOffers,
-        });
-      } catch (error) {
-        logger.error('Failed to process domain', {
-          domainId: domain.id,
-          rootUrl: domain.root_url,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    if (productsWithUrls.length === 0) {
+      logger.warn('No products with source URLs found. Run refresh-shopify-cache first.');
+      return {
+        totalProducts: 0,
+        successfulExtractions: 0,
+        failedExtractions: 0,
+      };
     }
 
+    // 3. Extract URLs and restore www. subdomain for scraping
+    const urls = productsWithUrls.map(p => {
+      const url = p.source_url_canonical;
+      // Restore www. subdomain if missing (Honda sites require it)
+      try {
+        const urlObj = new URL(url);
+        if (!urlObj.hostname.startsWith('www.')) {
+          urlObj.hostname = `www.${urlObj.hostname}`;
+          return urlObj.toString();
+        }
+        return url;
+      } catch {
+        return url;
+      }
+    });
+
+    // 4. Scrape all URLs
+    const scrapedProducts = await this.scrapeProducts(urls, options);
+
+    // 5. Store results
+    await this.storeProducts(scrapedProducts);
+
+    // 6. Calculate stats
+    const successfulExtractions = scrapedProducts.filter(p => p.success).length;
+    const failedExtractions = scrapedProducts.filter(p => !p.success).length;
+
     logger.info('Full scrape completed', {
-      totalProducts,
+      totalProducts: urls.length,
       successfulExtractions,
-      offersFound,
-      successRate: totalProducts > 0
-        ? ((successfulExtractions / totalProducts) * 100).toFixed(2) + '%'
-        : '0%',
+      failedExtractions,
+      successRate: `${((successfulExtractions / urls.length) * 100).toFixed(1)}%`,
     });
 
     return {
-      totalProducts,
+      totalProducts: urls.length,
       successfulExtractions,
-      offersFound,
+      failedExtractions,
     };
   }
 }

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'fs';
-import { shopifyClient } from '../shopify/client.js';
 import { logger } from '../utils/logger.js';
 import { canonicalizeUrl } from '../utils/canonicalize.js';
 

@@ -3,6 +3,7 @@ import '@shopify/shopify-api/adapters/node';
 import { config } from '../utils/config.js';
 import { logger } from '../utils/logger.js';
 import { ShopifyProduct, ShopifyPriceUpdate } from '../types/index.js';
+import { canonicalizeUrl } from '../utils/canonicalize.js';
 
 /**
  * Shopify GraphQL client for price syncing
@@ -30,8 +31,12 @@ export class ShopifyClient {
 
   /**
    * Get products by source_url metafield
+   * @param sourceUrl - The source URL to search for (will be canonicalized)
    */
   async getProductBySourceUrl(sourceUrl: string): Promise<ShopifyProduct | null> {
+    // CRITICAL: Canonicalize URL to match stored format
+    const canonicalUrl = canonicalizeUrl(sourceUrl);
+
     const query = `
       query getProductBySourceUrl($metafield: String!) {
         products(first: 1, query: $metafield) {
@@ -43,12 +48,14 @@ export class ShopifyClient {
                 edges {
                   node {
                     id
+                    title
+                    sku
                     price
                     compareAtPrice
                   }
                 }
               }
-              metafields(first: 10, namespace: "custom") {
+              metafields(first: 50, namespace: "custom") {
                 edges {
                   node {
                     namespace
@@ -66,36 +73,42 @@ export class ShopifyClient {
     try {
       const client = new this.shopify.clients.Graphql({ session: this.session });
 
-      const response = await client.query({
-        data: {
-          query,
-          variables: {
-            metafield: `metafields.custom.source_url:"${sourceUrl}"`,
-          },
+      // Try to find product by canonical URL
+      const response = await client.request(query, {
+        variables: {
+          metafield: `metafields.custom.source_url:"${canonicalUrl}"`,
         },
       });
 
-      const body = response.body as {
-        data?: {
-          products?: {
-            edges: Array<{
-              node: ShopifyProduct;
-            }>;
-          };
+      const body = response.data as {
+        products?: {
+          edges: Array<{
+            node: ShopifyProduct;
+          }>;
         };
       };
 
-      const products = body.data?.products?.edges;
+      const products = body.products?.edges;
 
       if (!products || products.length === 0) {
-        logger.debug('No Shopify product found for source URL', { sourceUrl });
+        logger.debug('No Shopify product found for source URL', {
+          original: sourceUrl,
+          canonical: canonicalUrl
+        });
         return null;
       }
+
+      logger.debug('Found Shopify product by source URL', {
+        original: sourceUrl,
+        canonical: canonicalUrl,
+        productId: products[0].node.id
+      });
 
       return products[0].node;
     } catch (error) {
       logger.error('Failed to fetch Shopify product by source URL', {
         sourceUrl,
+        canonicalUrl,
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
@@ -121,12 +134,14 @@ export class ShopifyClient {
                 edges {
                   node {
                     id
+                    title
+                    sku
                     price
                     compareAtPrice
                   }
                 }
               }
-              metafields(first: 10, namespace: "custom") {
+              metafields(first: 50, namespace: "custom") {
                 edges {
                   node {
                     namespace
@@ -149,28 +164,23 @@ export class ShopifyClient {
       const client = new this.shopify.clients.Graphql({ session: this.session });
 
       while (hasNextPage) {
-        const response = await client.query({
-          data: {
-            query,
-            variables: { cursor },
-          },
+        const response = await client.request(query, {
+          variables: { cursor },
         });
 
-        const body = response.body as {
-          data?: {
-            products?: {
-              pageInfo: {
-                hasNextPage: boolean;
-                endCursor: string;
-              };
-              edges: Array<{
-                node: ShopifyProduct;
-              }>;
+        const body = response.data as {
+          products?: {
+            pageInfo: {
+              hasNextPage: boolean;
+              endCursor: string;
             };
+            edges: Array<{
+              node: ShopifyProduct;
+            }>;
           };
         };
 
-        const products = body.data?.products;
+        const products = body.products;
 
         if (!products) break;
 
@@ -182,7 +192,14 @@ export class ShopifyClient {
           );
 
           if (sourceUrlMetafield) {
-            productMap.set(sourceUrlMetafield.node.value, product);
+            // CRITICAL: Canonicalize URL to match scraped URLs format
+            const canonicalUrl = canonicalizeUrl(sourceUrlMetafield.node.value);
+            productMap.set(canonicalUrl, product);
+            logger.debug('Shopify product cached with canonical URL', {
+              original: sourceUrlMetafield.node.value,
+              canonical: canonicalUrl,
+              title: product.title
+            });
           }
         }
 
@@ -238,8 +255,8 @@ export class ShopifyClient {
       const updatesByProduct = new Map<string, ShopifyPriceUpdate[]>();
 
       for (const update of updates) {
-        // Extract product ID from variant ID (gid://shopify/ProductVariant/12345 -> gid://shopify/Product/12345)
-        const productId = update.variantId.replace('/ProductVariant/', '/Product/').split('/').slice(0, -1).join('/');
+        // Use the productId directly from the update object
+        const productId = update.productId;
 
         if (!updatesByProduct.has(productId)) {
           updatesByProduct.set(productId, []);
@@ -256,25 +273,20 @@ export class ShopifyClient {
             compareAtPrice: u.compareAtPrice,
           }));
 
-          const response = await client.query({
-            data: {
-              query: mutation,
-              variables: {
-                productId,
-                variants,
-              },
+          const response = await client.request(mutation, {
+            variables: {
+              productId,
+              variants,
             },
           });
 
-          const body = response.body as {
-            data?: {
-              productVariantsBulkUpdate?: {
-                userErrors: Array<{ field: string[]; message: string }>;
-              };
+          const body = response.data as {
+            productVariantsBulkUpdate?: {
+              userErrors: Array<{ field: string[]; message: string }>;
             };
           };
 
-          const userErrors = body.data?.productVariantsBulkUpdate?.userErrors;
+          const userErrors = body.productVariantsBulkUpdate?.userErrors;
 
           if (userErrors && userErrors.length > 0) {
             failed += productUpdates.length;
@@ -335,26 +347,22 @@ export class ShopifyClient {
     try {
       const client = new this.shopify.clients.Graphql({ session: this.session });
 
-      const response = await client.query({
-        data: { query },
-      });
+      const response = await client.request(query);
 
-      const body = response.body as {
-        data?: {
-          metafieldDefinitions?: {
-            edges: Array<{
-              node: {
-                id: string;
-                name: string;
-                namespace: string;
-                key: string;
-              };
-            }>;
-          };
+      const body = response.data as {
+        metafieldDefinitions?: {
+          edges: Array<{
+            node: {
+              id: string;
+              name: string;
+              namespace: string;
+              key: string;
+            };
+          }>;
         };
       };
 
-      const definitions = body.data?.metafieldDefinitions?.edges;
+      const definitions = body.metafieldDefinitions?.edges;
 
       if (!definitions || definitions.length === 0) {
         logger.warn('source_url metafield not found - it may need to be created in Shopify admin');
@@ -368,6 +376,75 @@ export class ShopifyClient {
         error: error instanceof Error ? error.message : String(error),
       });
       return false;
+    }
+  }
+
+  /**
+   * Update product status (ACTIVE or ARCHIVED)
+   */
+  async updateProductStatus(
+    productId: string,
+    status: 'ACTIVE' | 'ARCHIVED'
+  ): Promise<{ success: boolean; errors: string[] }> {
+    const mutation = `
+      mutation productUpdate($input: ProductInput!) {
+        productUpdate(input: $input) {
+          product {
+            id
+            status
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      const response = await client.request(mutation, {
+        variables: {
+          input: {
+            id: productId,
+            status: status,
+          },
+        },
+      });
+
+      const body = response.data as {
+        productUpdate?: {
+          product?: {
+            id: string;
+            status: string;
+          };
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const userErrors = body.productUpdate?.userErrors;
+
+      if (userErrors && userErrors.length > 0) {
+        const errors = userErrors.map(e => `${e.field.join('.')}: ${e.message}`);
+        logger.warn('Shopify product status update had errors', { productId, errors });
+        return { success: false, errors };
+      }
+
+      logger.info('Shopify product status updated', {
+        productId,
+        status,
+        newStatus: body.productUpdate?.product?.status,
+      });
+
+      return { success: true, errors: [] };
+    } catch (error) {
+      logger.error('Failed to update Shopify product status', {
+        productId,
+        status,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
   }
 }
