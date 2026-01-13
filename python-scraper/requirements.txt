@@ -1,1 +1,3 @@
-scrapling\nfastapi\nuvicorn
+scrapling
+fastapi
+uvicorn
