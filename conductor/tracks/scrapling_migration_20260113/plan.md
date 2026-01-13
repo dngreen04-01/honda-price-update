@@ -3,7 +3,7 @@
 ## Phase 1: Research & Setup
 - [x] Task: Research Scrapling API and basic usage for Node.js/TypeScript.
 - [x] Task: Create `python-scraper` directory and set up Python environment (requirements.txt). dd932a7
-- [ ] Task: Install `scrapling`, `fastapi`, and `uvicorn` in the Python environment.
+- [x] Task: Install `scrapling`, `fastapi`, and `uvicorn` in the Python environment. 92e71a9
 - [ ] Task: Create a basic FastAPI server (`server.py`) exposing a `/scrape` endpoint using Scrapling.
 - [ ] Task: Conductor - User Manual Verification 'Research & Setup' (Protocol in workflow.md)
 
