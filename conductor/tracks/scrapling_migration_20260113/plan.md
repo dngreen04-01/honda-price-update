@@ -1,15 +1,16 @@
 # Plan: Scrapling Migration
 
 ## Phase 1: Research & Setup
-- [ ] Task: Research Scrapling API and basic usage for Node.js/TypeScript.
-- [ ] Task: Install `scrapling` dependency and remove `firecrawl-js`.
-- [ ] Task: Create a basic test script to verify Scrapling can fetch and parse a single Honda product page.
+- [x] Task: Research Scrapling API and basic usage for Node.js/TypeScript.
+- [x] Task: Create `python-scraper` directory and set up Python environment (requirements.txt). dd932a7
+- [ ] Task: Install `scrapling`, `fastapi`, and `uvicorn` in the Python environment.
+- [ ] Task: Create a basic FastAPI server (`server.py`) exposing a `/scrape` endpoint using Scrapling.
 - [ ] Task: Conductor - User Manual Verification 'Research & Setup' (Protocol in workflow.md)
 
 ## Phase 2: Core Scraper Implementation
-- [ ] Task: Implement `ScraplingClient` in `src/scraper/scrapling-client.ts` following the pattern of existing clients.
-- [ ] Task: Implement unit tests for `ScraplingClient` using mocks where appropriate.
-- [ ] Task: Ensure `ScraplingClient` handles common scraping challenges (user agents, timeouts, retries).
+- [ ] Task: Implement `ScraplingClient` in `src/scraper/scrapling-client.ts` to communicate with the Python service.
+- [ ] Task: Implement unit tests for `ScraplingClient` mocking the HTTP calls to the Python service.
+- [ ] Task: Ensure `ScraplingClient` handles service connectivity issues and timeouts.
 - [ ] Task: Conductor - User Manual Verification 'Core Scraper Implementation' (Protocol in workflow.md)
 
 ## Phase 3: Domain-Specific Adapters & Logic
