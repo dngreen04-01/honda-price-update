@@ -18,6 +18,7 @@
 - **Email Delivery:** SendGrid v3 API
 
 ## Scraping & Automation
-- **Scraping Engine:** **Scrapling** (Primary engine replacing Firecrawl)
+- **Scraping Engine:** **Scrapling** (Running in a dedicated Python microservice)
+- **Python Service:** FastAPI + Uvicorn (Exposing Scrapling via REST API)
 - **Browser Automation:** Puppeteer (Fallback and specialized interaction handling)
-- **Parsing:** Cheerio / JSDOM for deterministic HTML processing
+- **Parsing:** Cheerio / JSDOM (Node.js) & Scrapling's internal parsing (Python)

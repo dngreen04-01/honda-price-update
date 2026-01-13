@@ -4,5 +4,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [ ] Track: Replace Firecrawl with Scrapling
+## [~] Track: Replace Firecrawl with Scrapling
 *Link: [./conductor/tracks/scrapling_migration_20260113/](./conductor/tracks/scrapling_migration_20260113/)*

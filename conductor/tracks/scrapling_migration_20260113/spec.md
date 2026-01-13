@@ -1,5 +1,10 @@
 # Spec: Scrapling Migration
 
+## Resources
+- **Repository:** [Scrapling GitHub](https://github.com/D4Vinci/Scrapling)
+- **Documentation:** [Read the Docs](https://scrapling.readthedocs.io/en/latest/)
+- **Guide:** [The Web Scraping Club - Scrapling Hands-on Guide](https://substack.thewebscraping.club/p/scrapling-hands-on-guide)
+
 ## Goal
 Replace the current Firecrawl-based scraping implementation with **Scrapling**. This change aims to improve scraping reliability, reduce dependency on third-party API credits (if applicable), and provide better control over the scraping process.
 
