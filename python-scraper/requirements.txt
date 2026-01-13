@@ -1,3 +1,7 @@
 scrapling
 fastapi
 uvicorn
+curl_cffi
+patchright
+msgspec
+browserforge
