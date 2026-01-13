@@ -5,7 +5,7 @@
 - [x] Task: Create `python-scraper` directory and set up Python environment (requirements.txt). dd932a7
 - [x] Task: Install `scrapling`, `fastapi`, and `uvicorn` in the Python environment. 92e71a9
 - [x] Task: Create a basic FastAPI server (`server.py`) exposing a `/scrape` endpoint using Scrapling. 0da3d15
-- [ ] Task: Conductor - User Manual Verification 'Research & Setup' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Research & Setup' (Protocol in workflow.md) [checkpoint: 10051b7]
 
 ## Phase 2: Core Scraper Implementation
 - [ ] Task: Implement `ScraplingClient` in `src/scraper/scrapling-client.ts` to communicate with the Python service.
