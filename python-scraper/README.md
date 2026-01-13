@@ -22,7 +22,7 @@ This service hosts the [Scrapling](https://github.com/D4Vinci/Scrapling) engine 
 ## Running the Server
 
 ```bash
-uvicorn server:app --reload --port 8000
+uvicorn server:app --reload --port 8002
 ```
 
 ## API

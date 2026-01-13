@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from scrapling import StealthyFetcher
 import uvicorn
@@ -17,6 +18,10 @@ class ScrapeResponse(BaseModel):
     success: bool
     data: dict
 
+def fetch_url_sync(url: str):
+    fetcher = StealthyFetcher(auto_match=True)
+    return fetcher.fetch(url)
+
 @app.post("/scrape")
 async def scrape_url(request: ScrapeRequest):
     """
@@ -25,8 +30,8 @@ async def scrape_url(request: ScrapeRequest):
     logger.info(f"Received scrape request for URL: {request.url}")
     
     try:
-        fetcher = StealthyFetcher(auto_match=True)
-        response = fetcher.fetch(request.url)
+        # Run synchronous fetcher in a separate thread
+        response = await run_in_threadpool(fetch_url_sync, request.url)
         
         logger.info(f"Successfully fetched URL: {request.url} with status: {response.status_code}")
         
@@ -44,4 +49,5 @@ async def scrape_url(request: ScrapeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    # Defaulting to 8002 as requested
+    uvicorn.run("server:app", host="0.0.0.0", port=8002, reload=True)
