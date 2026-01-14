@@ -6,8 +6,9 @@ This guide covers deploying the Honda Supplier Price Scraper to production using
 
 - Supabase project (free or paid tier)
 - Node.js 18+ installed locally
+- Python 3.10+ installed locally (for Scrapling service)
 - Supabase CLI installed (`npm install -g supabase`)
-- API keys for Firecrawl, Shopify, and SendGrid
+- API keys for Shopify and SendGrid
 
 ## Step 1: Supabase Setup
 
@@ -53,9 +54,9 @@ Store API keys securely in Supabase Vault:
 ```sql
 -- Go to SQL Editor and run:
 INSERT INTO vault.secrets (name, secret) VALUES
-  ('FIRECRAWL_API_KEY', 'your-firecrawl-key'),
   ('SHOPIFY_ADMIN_ACCESS_TOKEN', 'shpat_xxxxx'),
-  ('SENDGRID_API_KEY', 'SG.xxxxx');
+  ('SENDGRID_API_KEY', 'SG.xxxxx'),
+  ('SCRAPLING_SERVICE_URL', 'http://your-scrapling-service:8002');
 ```
 
 ## Step 2: Shopify Configuration
@@ -153,9 +154,55 @@ For each product in Shopify, add metafield:
 1. SendGrid → Settings → Sender Authentication
 2. Verify your from email address
 
-## Step 4: Deploy Edge Function
+## Step 4: Deploy Scrapling Service
 
-### 4.1 Initialize Supabase Functions
+The Scrapling Python service must be running and accessible for the scraper to work.
+
+### 4.1 Local Development
+
+For local development, run the Scrapling service on your machine:
+
+```bash
+cd python-scraper
+source venv/bin/activate
+uvicorn server:app --host 0.0.0.0 --port 8002
+```
+
+### 4.2 Production Deployment Options
+
+**Option A: Docker Container**
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY python-scraper/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN playwright install chromium
+RUN playwright install-deps
+
+COPY python-scraper/server.py .
+EXPOSE 8002
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8002"]
+```
+
+**Option B: Cloud Run / Railway / Render**
+
+Deploy the `python-scraper/` directory as a Python web service with:
+- Build command: `pip install -r requirements.txt && playwright install chromium && playwright install-deps`
+- Start command: `uvicorn server:app --host 0.0.0.0 --port 8002`
+- Health check endpoint: `GET /health`
+
+### 4.3 Verify Deployment
+
+```bash
+curl https://your-scrapling-service.example.com/health
+# Should return: {"status":"ok"}
+```
+
+## Step 5: Deploy Edge Function
+
+### 5.1 Initialize Supabase Functions
 
 ```bash
 # Login to Supabase
@@ -168,7 +215,7 @@ supabase link --project-ref your-project-ref
 supabase functions new nightly-scraper-job
 ```
 
-### 4.2 Copy Application Code
+### 5.2 Copy Application Code
 
 ```bash
 # Copy source files to function
@@ -176,7 +223,7 @@ cp -r src/* supabase/functions/nightly-scraper-job/
 cp package.json supabase/functions/nightly-scraper-job/
 ```
 
-### 4.3 Create Function Entry Point
+### 5.3 Create Function Entry Point
 
 Edit `supabase/functions/nightly-scraper-job/index.ts`:
 
@@ -201,14 +248,14 @@ serve(async (req) => {
 });
 ```
 
-### 4.4 Deploy Function
+### 5.4 Deploy Function
 
 ```bash
 # Deploy to Supabase
 supabase functions deploy nightly-scraper-job
 
 # Set secrets
-supabase secrets set FIRECRAWL_API_KEY=your-key
+supabase secrets set SCRAPLING_SERVICE_URL=http://your-scrapling-service:8002
 supabase secrets set SHOPIFY_STORE_DOMAIN=your-store.myshopify.com
 supabase secrets set SHOPIFY_ADMIN_ACCESS_TOKEN=shpat_xxxxx
 supabase secrets set SENDGRID_API_KEY=SG.xxxxx
@@ -217,16 +264,16 @@ supabase secrets set SENDGRID_DIGEST_TEMPLATE_ID=d-xxxxx
 supabase secrets set SENDGRID_RECIPIENT_EMAILS=admin@yourdomain.com
 ```
 
-## Step 5: Schedule Cron Job
+## Step 6: Schedule Cron Job
 
-### 5.1 Enable pg_cron Extension
+### 6.1 Enable pg_cron Extension
 
 ```sql
 -- In Supabase SQL Editor
 CREATE EXTENSION IF NOT EXISTS pg_cron;
 ```
 
-### 5.2 Create Scheduled Job
+### 6.2 Create Scheduled Job
 
 ```sql
 -- Schedule for 02:00 NZT (adjust timezone as needed)
@@ -249,7 +296,7 @@ SELECT cron.schedule(
 - Standard time (UTC+12): `0 14 * * *` (14:00 UTC)
 - Daylight saving (UTC+13): `0 13 * * *` (13:00 UTC)
 
-### 5.3 Verify Cron Job
+### 6.3 Verify Cron Job
 
 ```sql
 -- List all scheduled jobs
@@ -259,9 +306,9 @@ SELECT * FROM cron.job;
 SELECT * FROM cron.job_run_details ORDER BY start_time DESC LIMIT 10;
 ```
 
-## Step 6: Testing
+## Step 7: Testing
 
-### 6.1 Manual Test Run
+### 7.1 Manual Test Run
 
 ```bash
 # Test locally first
@@ -272,36 +319,36 @@ curl -X POST https://your-project-ref.supabase.co/functions/v1/nightly-scraper-j
   -H "Authorization: Bearer YOUR_ANON_KEY"
 ```
 
-### 6.2 Verify Results
+### 7.2 Verify Results
 
 1. Check Supabase Table Editor for data in tables
 2. Check Shopify products for updated prices
 3. Verify email received in inbox
 4. Check Supabase Logs for function execution
 
-## Step 7: Monitoring
+## Step 8: Monitoring
 
-### 7.1 Supabase Logs
+### 8.1 Supabase Logs
 
 - Dashboard → Functions → nightly-scraper-job → Logs
 - Monitor execution time, errors, and output
 
-### 7.2 SendGrid Delivery
+### 8.2 SendGrid Delivery
 
 - SendGrid Dashboard → Activity
 - Monitor email delivery status
 
-### 7.3 Shopify Sync
+### 8.3 Shopify Sync
 
 - Check Shopify product prices match supplier
 - Review `shopify_catalog_cache` table
 
-### 7.4 Alerts
+### 8.4 Alerts
 
 Set up alerts for:
 - Function failures (via Supabase alerts)
 - Email delivery failures (via SendGrid webhooks)
-- Discovery rate below 90%
+- Scrapling service health (monitor /health endpoint)
 - Extraction success rate below 98%
 
 ## Troubleshooting
@@ -316,7 +363,7 @@ Set up alerts for:
 
 ### Rate Limiting
 
-**Solution**: Adjust delays in scraper orchestrator or upgrade Firecrawl plan
+**Solution**: Adjust delays in scraper orchestrator or increase concurrency limits in Scrapling service
 
 ### Email Not Received
 
@@ -339,13 +386,14 @@ Set up alerts for:
 - [ ] Database migrations completed
 - [ ] All tables exist and indexed
 - [ ] Supabase Vault secrets configured
+- [ ] Scrapling service deployed and healthy
 - [ ] Shopify custom app created with correct scopes
 - [ ] `source_url` metafield created and filterable
 - [ ] Products linked with supplier URLs
 - [ ] SendGrid template created and tested
 - [ ] Sender email verified
 - [ ] Edge function deployed
-- [ ] Environment secrets set
+- [ ] Environment secrets set (including SCRAPLING_SERVICE_URL)
 - [ ] Cron job scheduled
 - [ ] Manual test run successful
 - [ ] Email digest received

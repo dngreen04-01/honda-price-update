@@ -2,19 +2,20 @@
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
-import { TrendingUp, TrendingDown } from 'lucide-react'
+import { TrendingUp, TrendingDown, ExternalLink } from 'lucide-react'
 import { format } from 'date-fns'
 
 interface PriceChange {
   id: number
-  product_page_id: number
   canonical_url: string
-  domain_url: string
-  current_price: number | null
-  previous_price: number | null
+  product_title: string | null
+  variant_title: string | null
+  variant_sku: string | null
+  supplier_price: number | null
+  shopify_price: number | null
   price_change: number
   price_change_percent: number
-  changed_at: string
+  last_scraped_at: string
 }
 
 export const PriceChanges: React.FC = () => {
@@ -27,56 +28,45 @@ export const PriceChanges: React.FC = () => {
 
   const loadPriceChanges = async () => {
     try {
-      // Get all products with their latest two price entries
+      // Get all products from shopify_catalog_cache where prices differ
       const { data: products } = await supabase
-        .from('product_pages')
-        .select(`
-          id,
-          canonical_url,
-          latest_sale_price,
-          domains (root_url)
-        `)
-        .not('latest_sale_price', 'is', null)
-        .order('updated_at', { ascending: false })
-        .limit(50)
+        .from('shopify_catalog_cache')
+        .select('*')
+        .not('scraped_sale_price', 'is', null)
+        .not('shopify_price', 'is', null)
+        .order('last_scraped_at', { ascending: false })
 
       if (!products) return
 
       const changes: PriceChange[] = []
 
       for (const product of products) {
-        const { data: history } = await supabase
-          .from('price_history')
-          .select('sale_price, scraped_at')
-          .eq('product_page_id', product.id)
-          .order('scraped_at', { ascending: false })
-          .limit(2)
+        const supplierPrice = product.scraped_sale_price
+        const shopifyPrice = product.shopify_price
 
-        if (history && history.length >= 2) {
-          const current = history[0].sale_price
-          const previous = history[1].sale_price
+        // Only include if prices differ by more than $0.01
+        if (supplierPrice && shopifyPrice && Math.abs(shopifyPrice - supplierPrice) > 0.01) {
+          const change = shopifyPrice - supplierPrice
+          const changePercent = (change / supplierPrice) * 100
 
-          if (current !== previous && current !== null && previous !== null) {
-            const change = current - previous
-            const changePercent = (change / previous) * 100
-
-            changes.push({
-              id: product.id,
-              product_page_id: product.id,
-              canonical_url: product.canonical_url,
-              domain_url: (product as any).domains?.root_url || '',
-              current_price: current,
-              previous_price: previous,
-              price_change: change,
-              price_change_percent: changePercent,
-              changed_at: history[0].scraped_at,
-            })
-          }
+          changes.push({
+            id: product.id,
+            canonical_url: product.source_url_canonical,
+            product_title: product.product_title,
+            variant_title: product.variant_title,
+            variant_sku: product.variant_sku,
+            supplier_price: supplierPrice,
+            shopify_price: shopifyPrice,
+            price_change: change,
+            price_change_percent: changePercent,
+            last_scraped_at: product.last_scraped_at,
+          })
         }
       }
 
+      // Sort by absolute price difference (largest first)
       changes.sort((a, b) =>
-        new Date(b.changed_at).getTime() - new Date(a.changed_at).getTime()
+        Math.abs(b.price_change) - Math.abs(a.price_change)
       )
 
       setPriceChanges(changes)
@@ -102,14 +92,14 @@ export const PriceChanges: React.FC = () => {
     <div className="space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Price Changes</h1>
-        <p className="text-muted-foreground">Track price updates across all suppliers</p>
+        <p className="text-muted-foreground">Products where supplier price differs from Shopify price</p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Recent Price Changes</CardTitle>
+          <CardTitle>Price Discrepancies</CardTitle>
           <CardDescription>
-            {priceChanges.length} changes detected in the last scrape
+            {priceChanges.length} product{priceChanges.length !== 1 ? 's' : ''} with price differences detected
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -121,34 +111,64 @@ export const PriceChanges: React.FC = () => {
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800"
                 >
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{change.canonical_url}</p>
-                    <p className="text-xs text-muted-foreground">{change.domain_url}</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {format(new Date(change.changed_at), 'PPp')}
-                    </p>
+                    {change.product_title && (
+                      <p className="text-sm font-medium">{change.product_title}</p>
+                    )}
+                    {change.variant_title && change.variant_title !== change.product_title && (
+                      <p className="text-xs text-muted-foreground">{change.variant_title}</p>
+                    )}
+                    {change.variant_sku && (
+                      <p className="text-xs font-mono bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded inline-block mt-1">
+                        SKU: {change.variant_sku}
+                      </p>
+                    )}
+                    <a
+                      href={change.canonical_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 flex items-center gap-1 mt-1 truncate max-w-md"
+                    >
+                      <span className="truncate">{change.canonical_url}</span>
+                      <ExternalLink className="h-3 w-3 flex-shrink-0" />
+                    </a>
+                    {change.last_scraped_at && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Last scraped: {format(new Date(change.last_scraped_at), 'PPp')}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-4 ml-4">
                     <div className="text-right">
-                      <p className="text-sm line-through text-muted-foreground">
-                        ${change.previous_price?.toFixed(2)}
-                      </p>
-                      <p className="text-lg font-bold">
-                        ${change.current_price?.toFixed(2)}
+                      <p className="text-xs text-muted-foreground">Supplier</p>
+                      <p className="text-lg font-bold text-blue-600">
+                        ${change.supplier_price?.toFixed(2)}
                       </p>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="text-right">
+                      <p className="text-xs text-muted-foreground">Shopify</p>
+                      <p className="text-lg font-bold text-purple-600">
+                        ${change.shopify_price?.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-center gap-1">
                       {change.price_change > 0 ? (
                         <>
                           <TrendingUp className="h-5 w-5 text-red-600" />
                           <span className="text-sm font-medium text-red-600">
-                            +{change.price_change_percent.toFixed(1)}%
+                            +${change.price_change.toFixed(2)}
+                          </span>
+                          <span className="text-xs text-red-600">
+                            (+{change.price_change_percent.toFixed(1)}%)
                           </span>
                         </>
                       ) : (
                         <>
                           <TrendingDown className="h-5 w-5 text-green-600" />
                           <span className="text-sm font-medium text-green-600">
-                            {change.price_change_percent.toFixed(1)}%
+                            -${Math.abs(change.price_change).toFixed(2)}
+                          </span>
+                          <span className="text-xs text-green-600">
+                            ({change.price_change_percent.toFixed(1)}%)
                           </span>
                         </>
                       )}
@@ -158,7 +178,7 @@ export const PriceChanges: React.FC = () => {
               ))
             ) : (
               <p className="text-center text-muted-foreground py-8">
-                No price changes detected
+                No price discrepancies detected - all prices are in sync!
               </p>
             )}
           </div>

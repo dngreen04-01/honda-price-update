@@ -222,15 +222,132 @@ export interface Database {
           resolved_at?: string | null
         }
       }
+      user_roles: {
+        Row: {
+          id: number
+          name: 'superuser' | 'admin' | 'viewer'
+          description: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          name: 'superuser' | 'admin' | 'viewer'
+          description?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          name?: 'superuser' | 'admin' | 'viewer'
+          description?: string | null
+          created_at?: string
+        }
+      }
+      user_profiles: {
+        Row: {
+          id: string
+          email: string
+          display_name: string | null
+          role_id: number
+          invited_by: string | null
+          invited_at: string | null
+          last_login_at: string | null
+          is_active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id: string
+          email: string
+          display_name?: string | null
+          role_id?: number
+          invited_by?: string | null
+          invited_at?: string | null
+          last_login_at?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          email?: string
+          display_name?: string | null
+          role_id?: number
+          invited_by?: string | null
+          invited_at?: string | null
+          last_login_at?: string | null
+          is_active?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      user_invitations: {
+        Row: {
+          id: string
+          email: string
+          role_id: number
+          invited_by: string
+          status: 'pending' | 'accepted' | 'expired' | 'revoked'
+          expires_at: string
+          accepted_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          email: string
+          role_id?: number
+          invited_by: string
+          status?: 'pending' | 'accepted' | 'expired' | 'revoked'
+          expires_at?: string
+          accepted_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          email?: string
+          role_id?: number
+          invited_by?: string
+          status?: 'pending' | 'accepted' | 'expired' | 'revoked'
+          expires_at?: string
+          accepted_at?: string | null
+          created_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_user_role: {
+        Args: Record<string, never>
+        Returns: string
+      }
+      has_role: {
+        Args: { required_role: string }
+        Returns: boolean
+      }
+      is_superuser: {
+        Args: Record<string, never>
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
     }
   }
+}
+
+// Convenience types for user management
+export type UserRole = Database['public']['Tables']['user_roles']['Row']
+export type UserProfile = Database['public']['Tables']['user_profiles']['Row']
+export type UserInvitation = Database['public']['Tables']['user_invitations']['Row']
+
+// Extended types with joined data
+export interface UserProfileWithRole extends UserProfile {
+  role?: UserRole
+  invited_by_email?: string
+}
+
+export interface UserInvitationWithDetails extends UserInvitation {
+  role?: UserRole
+  invited_by_email?: string
 }

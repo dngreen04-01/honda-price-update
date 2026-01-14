@@ -9,7 +9,9 @@ import {
   ShoppingCart,
   GitCompare,
   AlertCircle,
-  LogOut
+  LogOut,
+  Users,
+  ShieldCheck
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 
@@ -23,8 +25,12 @@ const navigation = [
   { name: 'Actions Required', href: '/dashboard/actions', icon: AlertCircle },
 ]
 
+const adminNavigation = [
+  { name: 'User Management', href: '/dashboard/admin', icon: Users },
+]
+
 export const DashboardLayout: React.FC = () => {
-  const { signOut, user } = useAuth()
+  const { signOut, user, profile, isSuperuser } = useAuth()
   const location = useLocation()
 
   const handleSignOut = async () => {
@@ -60,6 +66,34 @@ export const DashboardLayout: React.FC = () => {
                 </Link>
               )
             })}
+
+            {/* Admin Navigation - Only shown to superusers */}
+            {isSuperuser && (
+              <>
+                <div className="pt-4 mt-4 border-t border-gray-200 dark:border-gray-700">
+                  <p className="px-3 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Administration
+                  </p>
+                </div>
+                {adminNavigation.map((item) => {
+                  const isActive = location.pathname === item.href
+                  return (
+                    <Link
+                      key={item.name}
+                      to={item.href}
+                      className={`flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                        isActive
+                          ? 'bg-purple-600 text-white'
+                          : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                      }`}
+                    >
+                      <item.icon className="w-5 h-5 mr-3" />
+                      {item.name}
+                    </Link>
+                  )
+                })}
+              </>
+            )}
           </nav>
 
           {/* User section */}
@@ -69,9 +103,12 @@ export const DashboardLayout: React.FC = () => {
                 <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
                   {user?.email}
                 </p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Signed in
-                </p>
+                <div className="flex items-center gap-1 mt-1">
+                  {isSuperuser && <ShieldCheck className="w-3 h-3 text-purple-600" />}
+                  <p className="text-xs text-gray-500 dark:text-gray-400 capitalize">
+                    {profile?.role?.name || 'User'}
+                  </p>
+                </div>
               </div>
               <Button
                 variant="ghost"

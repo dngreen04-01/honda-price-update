@@ -28,94 +28,61 @@ export const ActionsRequired: React.FC = () => {
     try {
       const actionsList: ActionItem[] = []
 
-      // 1. Supplier-only products (high priority)
-      const { data: supplierOnly } = await supabase
-        .from('reconcile_results')
-        .select('*')
-        .eq('product_type', 'supplier_only')
-        .is('resolved_at', null)
-        .limit(20)
-
-      supplierOnly?.forEach((item) => {
-        actionsList.push({
-          id: `supplier-${item.id}`,
-          type: 'supplier_only',
-          priority: 'high',
-          title: 'Product not in Shopify',
-          description: item.canonical_url,
-          url: item.canonical_url,
-          detected_at: item.detected_at,
-          action_required: 'Add this product to Shopify or mark as excluded',
-        })
-      })
-
-      // 2. Shopify-only products (medium priority)
-      const { data: shopifyOnly } = await supabase
-        .from('reconcile_results')
-        .select('*')
-        .eq('product_type', 'shopify_only')
-        .is('resolved_at', null)
-        .limit(20)
-
-      shopifyOnly?.forEach((item) => {
-        actionsList.push({
-          id: `shopify-${item.id}`,
-          type: 'shopify_only',
-          priority: 'medium',
-          title: 'Product not on supplier website',
-          description: item.canonical_url,
-          url: item.canonical_url,
-          detected_at: item.detected_at,
-          action_required: 'Product may be discontinued. Consider removing from Shopify.',
-        })
-      })
-
-      // 3. Low confidence price extractions (low priority)
-      const { data: lowConfidence } = await supabase
-        .from('product_pages')
-        .select('id, canonical_url, last_seen_at, domains(root_url)')
-        .eq('confidence', 'low')
-        .limit(20)
-
-      lowConfidence?.forEach((item) => {
-        actionsList.push({
-          id: `confidence-${item.id}`,
-          type: 'low_confidence',
-          priority: 'low',
-          title: 'Low confidence price extraction',
-          description: item.canonical_url,
-          url: item.canonical_url,
-          detected_at: item.last_seen_at,
-          action_required: 'Verify price is correct and update scraper if needed',
-        })
-      })
-
-      // 4. Price mismatches (high priority)
+      // Get all products from shopify_catalog_cache
       const { data: shopifyCache } = await supabase
         .from('shopify_catalog_cache')
-        .select(`
-          *,
-          product_pages!inner(latest_sale_price, canonical_url)
-        `)
-        .limit(50)
+        .select('*')
+        .limit(500)
 
-      shopifyCache?.forEach((item: any) => {
-        const supplierPrice = item.product_pages?.latest_sale_price
-        const shopifyPrice = item.shopify_price
+      if (shopifyCache) {
+        shopifyCache.forEach((item: any) => {
+          const supplierPrice = item.scraped_sale_price
+          const shopifyPrice = item.shopify_price
+          const scrapeConfidence = item.scrape_confidence
 
-        if (supplierPrice && shopifyPrice && Math.abs(supplierPrice - shopifyPrice) > 0.01) {
-          actionsList.push({
-            id: `mismatch-${item.id}`,
-            type: 'price_mismatch',
-            priority: 'high',
-            title: 'Price mismatch detected',
-            description: `Supplier: $${supplierPrice.toFixed(2)} | Shopify: $${shopifyPrice.toFixed(2)}`,
-            url: item.product_pages?.canonical_url || item.source_url_canonical,
-            detected_at: item.last_synced_at,
-            action_required: 'Investigate why prices are not syncing correctly',
-          })
-        }
-      })
+          // 1. Products not scraped yet (no supplier price)
+          if (!item.scraped_sale_price && item.source_url_canonical) {
+            actionsList.push({
+              id: `no-scrape-${item.id}`,
+              type: 'supplier_only',
+              priority: 'medium',
+              title: 'Product not scraped',
+              description: item.product_title || item.source_url_canonical,
+              url: item.source_url_canonical,
+              detected_at: item.last_synced_at,
+              action_required: 'Run scraper to get supplier price',
+            })
+          }
+
+          // 2. Low confidence price extractions (low priority)
+          if (scrapeConfidence !== null && scrapeConfidence < 0.7 && supplierPrice !== null) {
+            actionsList.push({
+              id: `confidence-${item.id}`,
+              type: 'low_confidence',
+              priority: 'low',
+              title: 'Low confidence price extraction',
+              description: item.product_title || item.source_url_canonical,
+              url: item.source_url_canonical,
+              detected_at: item.last_scraped_at || item.last_synced_at,
+              action_required: 'Verify price is correct and update scraper if needed',
+            })
+          }
+
+          // 3. Price mismatches (high priority)
+          if (supplierPrice && shopifyPrice && Math.abs(supplierPrice - shopifyPrice) > 0.01) {
+            actionsList.push({
+              id: `mismatch-${item.id}`,
+              type: 'price_mismatch',
+              priority: 'high',
+              title: 'Price mismatch detected',
+              description: `Supplier: $${supplierPrice.toFixed(2)} | Shopify: $${shopifyPrice.toFixed(2)}`,
+              url: item.source_url_canonical,
+              detected_at: item.last_scraped_at || item.last_synced_at,
+              action_required: 'Update Shopify price to match supplier',
+            })
+          }
+        })
+      }
 
       // Sort by priority and date
       actionsList.sort((a, b) => {

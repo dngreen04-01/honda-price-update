@@ -15,7 +15,7 @@ async function testDatabase(): Promise<boolean> {
     logger.info('Testing database connection...');
     const domains = await getActiveDomains();
     logger.info(`✅ Database OK - Found ${domains.length} active domains`);
-    domains.forEach(d => logger.info(`  - ${d.root_url}`));
+    domains.forEach((d: { root_url: string }) => logger.info(`  - ${d.root_url}`));
     return true;
   } catch (error) {
     logger.error('❌ Database test failed', {

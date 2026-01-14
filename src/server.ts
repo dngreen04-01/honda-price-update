@@ -6,6 +6,16 @@ import { handleManualPriceSync } from './api/price-sync-api.js';
 import { handleRescrape } from './api/rescrape-api.js';
 import { handleBulkScrape } from './api/bulk-scrape-api.js';
 import { logger } from './utils/logger.js';
+import { verifyAuth, requireSuperuser } from './middleware/auth.js';
+import {
+  getProfile,
+  listUsers,
+  inviteUser,
+  listInvitations,
+  revokeInvitation,
+  updateUserRole,
+  updateUserStatus,
+} from './api/admin-api.js';
 
 const app = express();
 const PORT = process.env.API_PORT || 3000;
@@ -66,6 +76,21 @@ app.post('/api/bulk-scrape', async (req, res) => {
     });
   }
 });
+
+// ============================================
+// Auth & User Management Endpoints
+// ============================================
+
+// Get current user profile (requires authentication)
+app.get('/api/auth/profile', verifyAuth, getProfile);
+
+// Admin endpoints (requires superuser)
+app.get('/api/admin/users', verifyAuth, requireSuperuser, listUsers);
+app.post('/api/admin/invite', verifyAuth, requireSuperuser, inviteUser);
+app.get('/api/admin/invitations', verifyAuth, requireSuperuser, listInvitations);
+app.delete('/api/admin/invitations/:id', verifyAuth, requireSuperuser, revokeInvitation);
+app.patch('/api/admin/users/:id/role', verifyAuth, requireSuperuser, updateUserRole);
+app.patch('/api/admin/users/:id/status', verifyAuth, requireSuperuser, updateUserStatus);
 
 // Start server
 app.listen(PORT, () => {

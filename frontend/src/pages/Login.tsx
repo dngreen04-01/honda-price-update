@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Input'
@@ -72,12 +72,9 @@ export const Login: React.FC = () => {
               {loading ? 'Signing in...' : 'Sign In'}
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm">
-            Don't have an account?{' '}
-            <Link to="/signup" className="text-primary hover:underline">
-              Sign up
-            </Link>
-          </div>
+          <p className="mt-4 text-center text-xs text-muted-foreground">
+            Access is by invitation only. Contact your administrator for an account.
+          </p>
         </CardContent>
       </Card>
     </div>

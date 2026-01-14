@@ -5,20 +5,39 @@ Quick start guide for local development and testing.
 ## Prerequisites
 
 - Node.js 18+ and npm
+- Python 3.10+ (for Scrapling service)
 - Supabase account (free tier works)
-- Firecrawl API key ([get one here](https://firecrawl.dev))
 - Shopify store with custom app access
 - SendGrid account (free tier works)
 
 ## Local Setup
 
-### 1. Install Dependencies
+### 1. Install Node.js Dependencies
 
 ```bash
 npm install
 ```
 
-### 2. Configure Environment
+### 2. Setup Scrapling Python Service
+
+```bash
+# Create and activate Python virtual environment
+cd python-scraper
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Start the Scrapling service (in a separate terminal)
+uvicorn server:app --reload --port 8002
+
+# Verify the service is running
+curl http://localhost:8002/health
+# Should return: {"status":"ok"}
+```
+
+### 3. Configure Environment
 
 ```bash
 # Copy example environment file
@@ -35,8 +54,11 @@ Required environment variables:
 SUPABASE_URL=https://xxxxx.supabase.co
 SUPABASE_SERVICE_KEY=eyJxxxx...
 
-# Firecrawl
-FIRECRAWL_API_KEY=fc-xxxxx
+# Scrapling Service (optional - defaults shown)
+SCRAPLING_SERVICE_URL=http://localhost:8002
+SCRAPLING_TIMEOUT_MS=60000
+SCRAPLING_MAX_RETRIES=3
+SCRAPLING_RENDER_JS=true
 
 # Shopify
 SHOPIFY_STORE_DOMAIN=your-store.myshopify.com
@@ -54,7 +76,7 @@ TIMEZONE=Pacific/Auckland
 LOG_LEVEL=info
 ```
 
-### 3. Setup Database
+### 4. Setup Database
 
 **Option A: Automated Migration**
 
@@ -69,20 +91,13 @@ npm run db:migrate
 3. Copy contents of `src/database/schema.sql`
 4. Paste and execute
 
-### 4. Build Project
+### 5. Build Project
 
 ```bash
 npm run build
 ```
 
 ## Getting API Keys
-
-### Firecrawl API Key
-
-1. Go to [firecrawl.dev](https://firecrawl.dev)
-2. Sign up for free account
-3. Navigate to API Keys section
-4. Copy your API key
 
 ### Shopify Admin Access Token
 
@@ -221,9 +236,10 @@ LOG_LEVEL=debug
 - Verify `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` are correct
 - Check database migrations ran successfully
 
-**"Firecrawl API rate limit"**
-- Upgrade Firecrawl plan or reduce scrape frequency
-- Check rate limits in Firecrawl dashboard
+**"Scrapling service not responding"**
+- Verify Python service is running: `curl http://localhost:8002/health`
+- Check `SCRAPLING_SERVICE_URL` environment variable
+- Review Python service logs for errors
 
 **"No Shopify product found for source URL"**
 - Verify product has `custom.source_url` metafield set
@@ -270,7 +286,7 @@ SELECT * FROM reconcile_results ORDER BY detected_at DESC LIMIT 10;
 
 ### Optimize Production
 
-1. **Enable caching**: Reuse Firecrawl results when possible
+1. **Enable caching**: Reuse Scrapling results when possible
 2. **Batch operations**: Group Shopify updates
 3. **Parallel processing**: Scrape domains concurrently
 4. **Incremental updates**: Only sync changed products
@@ -285,7 +301,7 @@ SELECT * FROM reconcile_results ORDER BY detected_at DESC LIMIT 10;
 
 ## Support Resources
 
-- **Firecrawl Docs**: https://docs.firecrawl.dev
+- **Scrapling Docs**: https://github.com/D4Vinci/Scrapling
 - **Shopify Admin API**: https://shopify.dev/docs/api/admin-graphql
 - **SendGrid API**: https://docs.sendgrid.com/api-reference
 - **Supabase Docs**: https://supabase.com/docs
@@ -293,7 +309,10 @@ SELECT * FROM reconcile_results ORDER BY detected_at DESC LIMIT 10;
 ## Troubleshooting Checklist
 
 - [ ] Node.js 18+ installed
-- [ ] Dependencies installed (`npm install`)
+- [ ] Python 3.10+ installed
+- [ ] Node.js dependencies installed (`npm install`)
+- [ ] Python dependencies installed (`pip install -r requirements.txt`)
+- [ ] Scrapling service running (`curl http://localhost:8002/health`)
 - [ ] `.env` configured with all keys
 - [ ] Database migrations completed
 - [ ] Domains seeded in database

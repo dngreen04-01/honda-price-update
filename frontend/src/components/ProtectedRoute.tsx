@@ -4,10 +4,14 @@ import { useAuth } from '../context/AuthContext'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
+  requiredRole?: 'superuser' | 'admin' | 'viewer'
 }
 
-export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
-  const { user, loading } = useAuth()
+export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
+  children,
+  requiredRole = 'viewer'
+}) => {
+  const { user, profile, loading, hasRole } = useAuth()
 
   if (loading) {
     return (
@@ -22,6 +26,24 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
 
   if (!user) {
     return <Navigate to="/login" replace />
+  }
+
+  // Check if user has a profile (user management tables set up)
+  // If no profile exists yet, allow access (for initial setup)
+  if (profile && !hasRole(requiredRole)) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600">Access Denied</h1>
+          <p className="mt-2 text-muted-foreground">
+            You don't have permission to access this page.
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Required role: {requiredRole}
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return <>{children}</>

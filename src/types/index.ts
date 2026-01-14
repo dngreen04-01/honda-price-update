@@ -85,23 +85,6 @@ export interface ScrapedProduct {
   extractedPrice: ExtractedPrice;
 }
 
-export interface FirecrawlMapResult {
-  success: boolean;
-  links: string[];
-}
-
-export interface FirecrawlCrawlResult {
-  success: boolean;
-  data: Array<{
-    url: string;
-    html: string;
-    metadata?: {
-      title?: string;
-      description?: string;
-    };
-  }>;
-}
-
 // Shopify Types
 export interface ShopifyProduct {
   id: string;
@@ -158,14 +141,53 @@ export interface EmailDigestData {
   };
 }
 
+// User Management Types
+export interface UserRole {
+  id: number;
+  name: 'superuser' | 'admin' | 'viewer';
+  description: string | null;
+  created_at: string;
+}
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  display_name: string | null;
+  role_id: number;
+  role?: UserRole;
+  invited_by: string | null;
+  invited_at: string | null;
+  last_login_at: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserInvitation {
+  id: string;
+  email: string;
+  role_id: number;
+  role?: UserRole;
+  invited_by: string;
+  invited_by_email?: string;
+  status: 'pending' | 'accepted' | 'expired' | 'revoked';
+  expires_at: string;
+  accepted_at: string | null;
+  created_at: string;
+}
+
 // Configuration
 export interface Config {
   supabase: {
     url: string;
     serviceKey: string;
   };
-  firecrawl: {
-    apiKey: string;
+  scrapling: {
+    serviceUrl: string;
+    timeoutMs?: number;
+    maxRetries?: number;
+    renderJs?: boolean;
+    proxyUrl?: string;
   };
   shopify: {
     storeDomain: string;
@@ -181,6 +203,7 @@ export interface Config {
   app: {
     timezone: string;
     logLevel: string;
+    superuserEmail: string;
   };
 }
 

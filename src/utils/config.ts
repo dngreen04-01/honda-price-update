@@ -16,8 +16,12 @@ export const config: Config = {
     url: getEnvVar('SUPABASE_URL'),
     serviceKey: getEnvVar('SUPABASE_SERVICE_KEY'),
   },
-  firecrawl: {
-    apiKey: getEnvVar('FIRECRAWL_API_KEY'),
+  scrapling: {
+    serviceUrl: getEnvVar('SCRAPLING_SERVICE_URL', false) || 'http://localhost:8002',
+    timeoutMs: parseInt(getEnvVar('SCRAPLING_TIMEOUT_MS', false) || '60000', 10),
+    maxRetries: parseInt(getEnvVar('SCRAPLING_MAX_RETRIES', false) || '3', 10),
+    renderJs: getEnvVar('SCRAPLING_RENDER_JS', false) !== 'false',
+    proxyUrl: getEnvVar('SCRAPLING_PROXY_URL', false) || undefined,
   },
   shopify: {
     storeDomain: getEnvVar('SHOPIFY_STORE_DOMAIN'),
@@ -33,5 +37,6 @@ export const config: Config = {
   app: {
     timezone: getEnvVar('TIMEZONE', false) || 'Pacific/Auckland',
     logLevel: getEnvVar('LOG_LEVEL', false) || 'info',
+    superuserEmail: getEnvVar('SUPERUSER_EMAIL', false) || '',
   },
 };

@@ -7,12 +7,12 @@ import { format } from 'date-fns'
 
 interface DashboardStats {
   totalProducts: number
-  totalDomains: number
+  productsWithUrls: number
   lastScrapeAt: string | null
   productsScrapedToday: number
-  pricesUpdatedToday: number
-  supplierOnlyCount: number
-  shopifyOnlyCount: number
+  productsWithPrices: number
+  notScrapedCount: number
+  priceMismatchCount: number
   extractionSuccessRate: number
   highConfidenceRate: number
 }
@@ -28,91 +28,84 @@ export const Overview: React.FC = () => {
 
   const loadDashboardData = async () => {
     try {
-      // Get total products
-      const { count: totalProducts } = await supabase
-        .from('product_pages')
-        .select('*', { count: 'exact', head: true })
+      // Get all products from shopify_catalog_cache (single source of truth)
+      const { data: allProducts } = await supabase
+        .from('shopify_catalog_cache')
+        .select('*')
 
-      // Get total domains
-      const { count: totalDomains } = await supabase
-        .from('domains')
-        .select('*', { count: 'exact', head: true })
-        .eq('active', true)
+      if (!allProducts) {
+        throw new Error('Failed to load products')
+      }
 
-      // Get last scrape time
-      const { data: lastScrape } = await supabase
-        .from('product_pages')
-        .select('last_seen_at')
-        .order('last_seen_at', { ascending: false })
-        .limit(1)
-        .single()
-
-      // Get products scraped today
       const today = new Date()
       today.setHours(0, 0, 0, 0)
-      const { count: productsScrapedToday } = await supabase
-        .from('product_pages')
-        .select('*', { count: 'exact', head: true })
-        .gte('last_seen_at', today.toISOString())
 
-      // Get prices updated today
-      const { count: pricesUpdatedToday } = await supabase
-        .from('shopify_catalog_cache')
-        .select('*', { count: 'exact', head: true })
-        .gte('last_synced_at', today.toISOString())
+      // Calculate stats from shopify_catalog_cache
+      const totalProducts = allProducts.length
+      const productsWithUrls = allProducts.filter(p => p.source_url_canonical).length
+      const productsWithPrices = allProducts.filter(p => p.scraped_sale_price !== null).length
+      const notScrapedCount = allProducts.filter(p => p.source_url_canonical && p.scraped_sale_price === null).length
 
-      // Get reconciliation counts
-      const { data: reconcileData } = await supabase
-        .from('reconcile_results')
-        .select('product_type')
-        .is('resolved_at', null)
+      // Calculate price mismatches
+      const priceMismatchCount = allProducts.filter(p => {
+        if (!p.scraped_sale_price || !p.shopify_price) return false
+        return Math.abs(p.scraped_sale_price - p.shopify_price) > 0.01
+      }).length
 
-      const supplierOnlyCount = reconcileData?.filter(r => r.product_type === 'supplier_only').length || 0
-      const shopifyOnlyCount = reconcileData?.filter(r => r.product_type === 'shopify_only').length || 0
+      // Get products scraped today
+      const productsScrapedToday = allProducts.filter(p => {
+        if (!p.last_scraped_at) return false
+        return new Date(p.last_scraped_at) >= today
+      }).length
+
+      // Get last scrape time
+      const scrapedProducts = allProducts.filter(p => p.last_scraped_at)
+      const lastScrapeAt = scrapedProducts.length > 0
+        ? scrapedProducts.reduce((latest, p) =>
+            new Date(p.last_scraped_at!) > new Date(latest) ? p.last_scraped_at! : latest,
+            scrapedProducts[0].last_scraped_at!
+          )
+        : null
 
       // Get extraction stats
-      const { data: allProducts } = await supabase
-        .from('product_pages')
-        .select('confidence, latest_sale_price')
+      const extractionSuccessRate = productsWithUrls > 0
+        ? (productsWithPrices / productsWithUrls) * 100
+        : 0
 
-      const totalWithPrice = allProducts?.filter(p => p.latest_sale_price !== null).length || 0
-      const allProductsCount = allProducts?.length || 1
-      const extractionSuccessRate = (totalWithPrice / allProductsCount) * 100
+      // High confidence = scrape_confidence >= 0.7
+      const highConfidenceCount = allProducts.filter(p =>
+        p.scrape_confidence !== null && p.scrape_confidence >= 0.7
+      ).length
+      const highConfidenceRate = productsWithPrices > 0
+        ? (highConfidenceCount / productsWithPrices) * 100
+        : 0
 
-      const highConfidenceCount = allProducts?.filter(p => p.confidence === 'high').length || 0
-      const highConfidenceRate = (highConfidenceCount / allProductsCount) * 100
-
-      // Get recent price changes
-      const { data: priceChanges } = await supabase
-        .from('price_history')
-        .select(`
-          id,
-          sale_price,
-          scraped_at,
-          product_page_id,
-          product_pages (
-            canonical_url,
-            domains (
-              root_url
-            )
-          )
-        `)
-        .order('scraped_at', { ascending: false })
-        .limit(5)
+      // Get recent scraped products for activity feed
+      const recentlyScraped = allProducts
+        .filter(p => p.last_scraped_at && p.scraped_sale_price !== null)
+        .sort((a, b) => new Date(b.last_scraped_at!).getTime() - new Date(a.last_scraped_at!).getTime())
+        .slice(0, 5)
+        .map(p => ({
+          id: p.id,
+          product_title: p.product_title,
+          source_url_canonical: p.source_url_canonical,
+          scraped_sale_price: p.scraped_sale_price,
+          last_scraped_at: p.last_scraped_at,
+        }))
 
       setStats({
-        totalProducts: totalProducts || 0,
-        totalDomains: totalDomains || 0,
-        lastScrapeAt: lastScrape?.last_seen_at || null,
-        productsScrapedToday: productsScrapedToday || 0,
-        pricesUpdatedToday: pricesUpdatedToday || 0,
-        supplierOnlyCount,
-        shopifyOnlyCount,
+        totalProducts,
+        productsWithUrls,
+        lastScrapeAt,
+        productsScrapedToday,
+        productsWithPrices,
+        notScrapedCount,
+        priceMismatchCount,
         extractionSuccessRate,
         highConfidenceRate,
       })
 
-      setRecentPriceChanges(priceChanges || [])
+      setRecentPriceChanges(recentlyScraped)
     } catch (error) {
       console.error('Error loading dashboard data:', error)
     } finally {
@@ -154,7 +147,7 @@ export const Overview: React.FC = () => {
           <CardContent>
             <div className="text-2xl font-bold">{stats.totalProducts}</div>
             <p className="text-xs text-muted-foreground">
-              Across {stats.totalDomains} active suppliers
+              {stats.productsWithUrls} with supplier URLs
             </p>
           </CardContent>
         </Card>
@@ -176,12 +169,12 @@ export const Overview: React.FC = () => {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Shopify Updates</CardTitle>
+            <CardTitle className="text-sm font-medium">With Prices</CardTitle>
             <ShoppingCart className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats.pricesUpdatedToday}</div>
-            <p className="text-xs text-muted-foreground">Prices synced today</p>
+            <div className="text-2xl font-bold">{stats.productsWithPrices}</div>
+            <p className="text-xs text-muted-foreground">Products with scraped prices</p>
           </CardContent>
         </Card>
 
@@ -192,10 +185,10 @@ export const Overview: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {stats.supplierOnlyCount + stats.shopifyOnlyCount}
+              {stats.notScrapedCount + stats.priceMismatchCount}
             </div>
             <p className="text-xs text-muted-foreground">
-              {stats.supplierOnlyCount} supplier / {stats.shopifyOnlyCount} Shopify
+              {stats.notScrapedCount} not scraped / {stats.priceMismatchCount} mismatches
             </p>
           </CardContent>
         </Card>
@@ -248,15 +241,15 @@ export const Overview: React.FC = () => {
                   <div key={change.id} className="flex items-center justify-between text-sm">
                     <div className="flex-1 truncate">
                       <span className="text-muted-foreground">
-                        {change.product_pages?.canonical_url?.split('/').pop() || 'Unknown'}
+                        {change.product_title || change.source_url_canonical?.split('/').pop() || 'Unknown'}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium">
-                        ${change.sale_price?.toFixed(2) || 'N/A'}
+                        ${change.scraped_sale_price?.toFixed(2) || 'N/A'}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {format(new Date(change.scraped_at), 'HH:mm')}
+                        {format(new Date(change.last_scraped_at), 'HH:mm')}
                       </span>
                     </div>
                   </div>

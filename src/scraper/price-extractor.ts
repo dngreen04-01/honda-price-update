@@ -1,7 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { ExtractedPrice } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import { firecrawlClient } from './firecrawl-client.js';
 import { extractPriceFromHtml } from './honda-selectors.js';
 
 /**
@@ -9,53 +8,22 @@ import { extractPriceFromHtml } from './honda-selectors.js';
  */
 export class PriceExtractor {
   /**
-   * Main extraction method - tries deterministic first, falls back to LLM
+   * Main extraction method - deterministic extraction only
    */
   async extract(url: string, html: string): Promise<ExtractedPrice> {
-    // Try deterministic extraction first (now with URL for Honda-specific selectors)
+    // Deterministic extraction only - no LLM fallback
     const deterministicResult = this.extractDeterministic(html, url);
 
-    if (deterministicResult.salePrice !== null && deterministicResult.confidence === 'high') {
-      logger.debug('Deterministic extraction successful', { url });
-      return {
-        ...deterministicResult,
-        source: 'deterministic',
-      };
-    }
+    logger.debug('Deterministic extraction complete', {
+      url,
+      hasPrice: deterministicResult.salePrice !== null,
+      confidence: deterministicResult.confidence,
+    });
 
-    // Fall back to LLM extraction
-    logger.info('Falling back to LLM extraction', { url });
-    try {
-      const llmResult = await this.extractWithLLM(url);
-
-      // Validate LLM result for anomalies
-      const validated = this.validatePrice(llmResult.salePrice, url);
-      if (!validated.isValid) {
-        logger.warn('LLM price appears anomalous, using deterministic result', {
-          url,
-          llmPrice: llmResult.salePrice,
-          reason: validated.reason,
-        });
-        return {
-          ...deterministicResult,
-          source: 'deterministic',
-        };
-      }
-
-      return {
-        ...llmResult,
-        source: 'llm',
-      };
-    } catch (error) {
-      logger.warn('LLM extraction failed, using deterministic result', {
-        url,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return {
-        ...deterministicResult,
-        source: 'deterministic',
-      };
-    }
+    return {
+      ...deterministicResult,
+      source: 'deterministic',
+    };
   }
 
   /**
@@ -252,52 +220,6 @@ export class PriceExtractor {
   }
 
   /**
-   * Extract using LLM via Firecrawl
-   */
-  private async extractWithLLM(url: string): Promise<Omit<ExtractedPrice, 'source'>> {
-    const schema = {
-      type: 'object',
-      properties: {
-        salePrice: {
-          type: 'number',
-          description: 'Current sale price or regular price if no sale',
-        },
-        originalPrice: {
-          type: 'number',
-          description: 'Original price before discount (if on sale)',
-          nullable: true,
-        },
-        currency: {
-          type: 'string',
-          description: 'Currency code (e.g., NZD, USD)',
-          default: 'NZD',
-        },
-      },
-      required: ['salePrice'],
-    };
-
-    const result = await firecrawlClient.extract<{
-      salePrice: number;
-      originalPrice?: number | null;
-      currency?: string;
-    }>(url, schema, {
-      prompt: 'Extract product pricing information from this page.',
-    });
-
-    if (!result.success || !result.data.salePrice) {
-      throw new Error('LLM extraction returned no price');
-    }
-
-    return {
-      salePrice: result.data.salePrice,
-      originalPrice: result.data.originalPrice || null,
-      currency: result.data.currency || 'NZD',
-      confidence: 'low',
-      htmlSnippet: undefined,
-    };
-  }
-
-  /**
    * Parse price from text
    */
   private parsePrice(text: string | null | undefined): number | null {
@@ -388,37 +310,6 @@ export class PriceExtractor {
     }
 
     return this.emptyResult();
-  }
-
-  /**
-   * Validate price for anomalies
-   */
-  private validatePrice(
-    price: number | null,
-    url: string
-  ): { isValid: boolean; reason?: string } {
-    if (price === null) {
-      return { isValid: false, reason: 'Price is null' };
-    }
-
-    // Check for unrealistic prices
-    if (price < 1) {
-      return { isValid: false, reason: 'Price too low (< $1)' };
-    }
-
-    if (price > 50000) {
-      return { isValid: false, reason: 'Price too high (> $50,000)' };
-    }
-
-    // Check for suspiciously round numbers that might be meta content
-    // e.g., $1000, $1049 when actual price is $44
-    const priceStr = price.toString();
-    if (price > 100 && priceStr.endsWith('00') && !priceStr.endsWith('.00')) {
-      logger.warn('Suspicious round price detected', { url, price });
-      // Don't reject, but flag for review
-    }
-
-    return { isValid: true };
   }
 
   /**

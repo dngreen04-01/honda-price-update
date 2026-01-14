@@ -5,7 +5,7 @@ import { getShopifyCatalogCache } from '../database/queries.js';
 
 /**
  * API handler for re-scraping individual product URLs
- * Uses the simplified scraper architecture with Bright Data
+ * Uses the Scrapling service for anti-bot scraping
  */
 
 export interface RescrapeRequest {
@@ -25,7 +25,7 @@ export interface RescrapeResponse {
 
 /**
  * Re-scrape a single product URL to get fresh price data
- * Uses Bright Data Scraping Browser for bot protection bypass
+ * Uses Scrapling service for bot protection bypass
  */
 export async function handleRescrape(
   request: RescrapeRequest
@@ -69,13 +69,13 @@ export async function handleRescrape(
       scrapeUrl = request.url;
     }
 
-    logger.info('Starting fresh scrape with Bright Data', {
+    logger.info('Starting fresh scrape with Scrapling', {
       originalUrl: request.url,
       scrapeUrl,
       canonicalUrl,
     });
 
-    // Scrape using Bright Data Puppeteer client
+    // Scrape using Scrapling service
     const scrapeResults = await scraperOrchestrator.scrapeProducts([scrapeUrl], {
       concurrency: 1, // Single URL
     });

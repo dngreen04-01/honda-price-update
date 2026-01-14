@@ -22,14 +22,14 @@ export class ReconciliationEngine {
 
     // Get all product URLs from supplier scrape (set A)
     const supplierProducts = await getAllProductPages();
-    const supplierUrls = new Set(
-      supplierProducts.map(p => p.canonical_url)
+    const supplierUrls = new Set<string>(
+      supplierProducts.map((p: { canonical_url: string }) => p.canonical_url)
     );
 
     // Get all product URLs from Shopify cache (set B)
     const shopifyProducts = await getShopifyCatalogCache();
-    const shopifyUrls = new Set(
-      shopifyProducts.map(p => p.source_url_canonical)
+    const shopifyUrls = new Set<string>(
+      shopifyProducts.map((p: { source_url_canonical: string }) => p.source_url_canonical)
     );
 
     logger.info('Reconciliation sets loaded', {

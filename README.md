@@ -5,13 +5,14 @@ Automated supplier website price and offer scraper with Shopify sync and email n
 ## Features
 
 - **Automated Nightly Scraping**: Crawls Honda NZ supplier websites (02:00 NZT)
-- **Price Extraction**: Deterministic parsing + LLM fallback for high accuracy
+- **Price Extraction**: Deterministic parsing with Honda-specific selectors for high accuracy
 - **Shopify Integration**: Syncs prices via GraphQL Admin API
 - **Historical Tracking**: Maintains price history in Supabase
 - **Offer Detection**: Tracks promotional offers and dates
 - **Email Digests**: Comprehensive nightly summaries with CSV attachments
 - **Reconciliation**: Detects supplier-only and Shopify-only products
 - **Internal Dashboard**: React-based monitoring frontend with authentication
+- **Anti-Bot Protection**: Uses Scrapling Python service with stealth browser automation
 
 ## Tech Stack
 
@@ -19,7 +20,7 @@ Automated supplier website price and offer scraper with Shopify sync and email n
 - **Frontend**: React 18 + TypeScript + Vite + Tailwind CSS
 - **Database**: Supabase (PostgreSQL)
 - **Authentication**: Supabase Auth
-- **Scraping**: Firecrawl v2 API
+- **Scraping**: Scrapling Python service (DynamicFetcher with stealth mode)
 - **E-commerce**: Shopify GraphQL Admin API
 - **Email**: SendGrid v3 API
 - **Orchestration**: Supabase Edge Functions + Cron
@@ -29,7 +30,7 @@ Automated supplier website price and offer scraper with Shopify sync and email n
 ```
 .
 ├── src/              # Backend application
-│   ├── scraper/      # Firecrawl integration & price extraction
+│   ├── scraper/      # Scrapling client & price extraction
 │   ├── database/     # Supabase client & queries
 │   ├── shopify/      # Shopify GraphQL client & sync logic
 │   ├── email/        # SendGrid integration & templates
@@ -37,6 +38,10 @@ Automated supplier website price and offer scraper with Shopify sync and email n
 │   ├── utils/        # URL canonicalization, logging, etc.
 │   ├── types/        # TypeScript type definitions
 │   └── index.ts      # Main orchestration entry point
+├── python-scraper/   # Scrapling Python service
+│   ├── server.py     # FastAPI server with /scrape and /health endpoints
+│   ├── requirements.txt
+│   └── venv/         # Python virtual environment
 └── frontend/         # Internal monitoring dashboard
     ├── src/          # Frontend React application
     ├── public/       # Static assets

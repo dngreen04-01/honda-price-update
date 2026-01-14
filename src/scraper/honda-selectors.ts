@@ -17,14 +17,15 @@ export interface DomainSelectors {
 
 /**
  * Selectors for each Honda domain
- * TODO: Update these selectors by inspecting actual HTML from each domain
+ * Updated based on actual HTML inspection from each domain
  */
 export const hondaSelectors: Record<string, DomainSelectors> = {
   'hondaoutdoors.co.nz': {
-    // Magento 2 specific selectors - prioritize most specific selectors first
-    // Use .product-info-price/.product-info-main to avoid matching related products/upsells
-    // #total-price is JavaScript-rendered and contains the final calculated price
-    price: '#total-price, .product-info-price .price-final_price .price, .product-info-main .price-box .price',
+    // Magento 2 specific selectors - updated based on actual HTML structure
+    // .price-str contains the displayed price (e.g., "$699")
+    // [data-price] attribute on hidden inputs contains numeric price
+    // For grouped products, the first .price-str is typically the main product
+    price: '#total-price, .product-info-price .price-str, .product-info-price .price-final_price .price, .product-info-main .price-box .price, [data-price]',
     salePrice: '.product-info-price .special-price .price, .product-info-main .special-price .price',
     originalPrice: '.product-info-price .old-price .price, .product-info-main .old-price .price',
     sku: '.product.attribute.sku .value, [itemprop="sku"]',
@@ -91,27 +92,80 @@ export function extractPriceWithSelectors(
     return match ? parseFloat(match[0]) : null;
   };
 
-  // Extract prices - prioritize specific price selector over sale price
-  // This avoids matching related products' sale prices
-  const salePriceText = getText(selectors.price) || getText(selectors.salePrice);
+  // Helper to extract price from data-price attribute
+  // For grouped products, the first data-price is typically the main product
+  const extractDataPrice = (): number | null => {
+    const dataPriceElements = $('[data-price]');
+    if (dataPriceElements.length === 0) return null;
+
+    // Get the first data-price (main product in grouped products)
+    const firstElement = dataPriceElements.first();
+    const priceStr = firstElement.attr('data-price');
+    if (priceStr) {
+      const price = parseFloat(priceStr);
+      if (!isNaN(price) && price > 0) {
+        return price;
+      }
+    }
+
+    return null;
+  };
+
+  // Try multiple extraction strategies in order of preference
+  let salePrice: number | null = null;
+  let confidence = 0;
+
+  // Strategy 1: Try text-based selectors (excluding [data-price] which needs special handling)
+  const textSelectors = selectors.price.split(',')
+    .map(s => s.trim())
+    .filter(s => !s.includes('data-price'));
+
+  for (const selector of textSelectors) {
+    const text = getText(selector);
+    const price = parsePrice(text);
+    if (price !== null && price > 0) {
+      salePrice = price;
+      confidence = 0.8; // High confidence from text selector
+      break;
+    }
+  }
+
+  // Strategy 2: Fall back to data-price attribute (for grouped products)
+  if (salePrice === null) {
+    const dataPrice = extractDataPrice();
+    if (dataPrice !== null) {
+      salePrice = dataPrice;
+      confidence = 0.7; // Slightly lower confidence from data attribute
+    }
+  }
+
+  // Strategy 3: Try sale price selectors
+  if (salePrice === null) {
+    const salePriceText = getText(selectors.salePrice);
+    salePrice = parsePrice(salePriceText);
+    if (salePrice !== null) {
+      confidence = 0.6;
+    }
+  }
+
   const originalPriceText = getText(selectors.originalPrice);
 
   // Extract SKU and name
   const sku = getText(selectors.sku);
   const name = getText(selectors.name);
 
-  // Calculate confidence based on what we found
-  let confidence = 0;
-  if (salePriceText) confidence += 0.5;
-  if (name) confidence += 0.3;
-  if (sku) confidence += 0.2;
+  // Adjust confidence based on what we found
+  if (salePrice !== null) {
+    if (name) confidence += 0.1;
+    if (sku) confidence += 0.1;
+  }
 
   return {
-    salePrice: parsePrice(salePriceText),
+    salePrice,
     originalPrice: parsePrice(originalPriceText),
     sku,
     name,
-    confidence,
+    confidence: Math.min(confidence, 1.0),
   };
 }
 
