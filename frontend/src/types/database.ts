@@ -193,35 +193,6 @@ export interface Database {
           updated_at?: string
         }
       }
-      reconcile_results: {
-        Row: {
-          id: number
-          run_id: string
-          product_type: 'supplier_only' | 'shopify_only'
-          canonical_url: string
-          status: 'active' | 'redirect' | '404' | 'pending'
-          detected_at: string
-          resolved_at: string | null
-        }
-        Insert: {
-          id?: number
-          run_id: string
-          product_type: 'supplier_only' | 'shopify_only'
-          canonical_url: string
-          status?: 'active' | 'redirect' | '404' | 'pending'
-          detected_at?: string
-          resolved_at?: string | null
-        }
-        Update: {
-          id?: number
-          run_id?: string
-          product_type?: 'supplier_only' | 'shopify_only'
-          canonical_url?: string
-          status?: 'active' | 'redirect' | '404' | 'pending'
-          detected_at?: string
-          resolved_at?: string | null
-        }
-      }
       user_roles: {
         Row: {
           id: number

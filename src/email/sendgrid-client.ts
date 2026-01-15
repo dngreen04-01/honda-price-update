@@ -47,8 +47,6 @@ export class SendGridClient {
             endDate: offer.end_date || 'N/A',
             offerUrl: offer.offer_url,
           })),
-          supplierOnlyProducts: data.supplierOnlyProducts.map(url => ({ url })),
-          shopifyOnlyProducts: data.shopifyOnlyProducts.map(url => ({ url })),
           stats: {
             totalProductsScraped: data.stats.totalProductsScraped,
             successfulExtractions: data.stats.successfulExtractions,
@@ -60,8 +58,6 @@ export class SendGridClient {
           },
           hasPriceChanges: data.priceChanges.length > 0,
           hasNewOffers: data.newOffers.length > 0,
-          hasSupplierOnlyProducts: data.supplierOnlyProducts.length > 0,
-          hasShopifyOnlyProducts: data.shopifyOnlyProducts.length > 0,
           date: new Date().toLocaleDateString('en-NZ', {
             weekday: 'long',
             year: 'numeric',

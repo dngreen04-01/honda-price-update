@@ -7,7 +7,6 @@ import {
   TrendingUp,
   DollarSign,
   ShoppingCart,
-  GitCompare,
   AlertCircle,
   LogOut,
   Users,
@@ -21,7 +20,6 @@ const navigation = [
   { name: 'Price Changes', href: '/dashboard/prices', icon: TrendingUp },
   { name: 'Price Comparison', href: '/dashboard/price-comparison', icon: DollarSign },
   { name: 'Shopify Updates', href: '/dashboard/shopify', icon: ShoppingCart },
-  { name: 'Reconciliation', href: '/dashboard/reconciliation', icon: GitCompare },
   { name: 'Actions Required', href: '/dashboard/actions', icon: AlertCircle },
 ]
 

@@ -9,7 +9,6 @@ import { ScrapingTasks } from './pages/Dashboard/ScrapingTasks'
 import { PriceChanges } from './pages/Dashboard/PriceChanges'
 import { PriceComparison } from './pages/Dashboard/PriceComparison'
 import { ShopifyUpdates } from './pages/Dashboard/ShopifyUpdates'
-import { Reconciliation } from './pages/Dashboard/Reconciliation'
 import { ActionsRequired } from './pages/Dashboard/ActionsRequired'
 import { UserManagement } from './pages/Admin/UserManagement'
 
@@ -33,7 +32,6 @@ function App() {
             <Route path="prices" element={<PriceChanges />} />
             <Route path="price-comparison" element={<PriceComparison />} />
             <Route path="shopify" element={<ShopifyUpdates />} />
-            <Route path="reconciliation" element={<Reconciliation />} />
             <Route path="actions" element={<ActionsRequired />} />
             <Route
               path="admin"

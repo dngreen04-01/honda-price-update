@@ -1,4 +1,5 @@
--- Add scraped price columns to shopify_catalog_cache
+-
+- Add scraped price columns to shopify_catalog_cache
 ALTER TABLE shopify_catalog_cache
 ADD COLUMN IF NOT EXISTS scraped_sale_price DECIMAL(10, 2),
 ADD COLUMN IF NOT EXISTS scraped_original_price DECIMAL(10, 2),

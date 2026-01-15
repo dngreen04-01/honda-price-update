@@ -44,23 +44,6 @@ export function generatePriceChangesCsv(priceChanges: PriceChange[]): string {
 }
 
 /**
- * Generate missing products CSV
- */
-export function generateMissingProductsCsv(
-  supplierOnly: string[],
-  shopifyOnly: string[]
-): string {
-  const headers = ['URL', 'Type'];
-
-  const rows = [
-    ...supplierOnly.map(url => [url, 'Supplier Only']),
-    ...shopifyOnly.map(url => [url, 'Shopify Only']),
-  ];
-
-  return generateCsv(headers, rows);
-}
-
-/**
  * Detect price changes from history
  */
 export async function detectPriceChanges(): Promise<PriceChange[]> {
@@ -123,8 +106,6 @@ export async function detectPriceChanges(): Promise<PriceChange[]> {
  * Generate complete email digest data
  */
 export async function generateDigestData(
-  supplierOnlyProducts: string[],
-  shopifyOnlyProducts: string[],
   stats: EmailDigestData['stats']
 ): Promise<EmailDigestData> {
   logger.info('Generating email digest data');
@@ -138,16 +119,12 @@ export async function generateDigestData(
   const digestData: EmailDigestData = {
     priceChanges,
     newOffers,
-    supplierOnlyProducts,
-    shopifyOnlyProducts,
     stats,
   };
 
   logger.info('Email digest data generated', {
     priceChanges: priceChanges.length,
     newOffers: newOffers.length,
-    supplierOnly: supplierOnlyProducts.length,
-    shopifyOnly: shopifyOnlyProducts.length,
   });
 
   return digestData;
@@ -169,22 +146,6 @@ export function generateAttachments(digestData: EmailDigestData): Array<{
     attachments.push({
       content: Buffer.from(priceChangesCsv).toString('base64'),
       filename: `price-changes-${new Date().toISOString().split('T')[0]}.csv`,
-      type: 'text/csv',
-    });
-  }
-
-  // Missing products CSV
-  if (
-    digestData.supplierOnlyProducts.length > 0 ||
-    digestData.shopifyOnlyProducts.length > 0
-  ) {
-    const missingProductsCsv = generateMissingProductsCsv(
-      digestData.supplierOnlyProducts,
-      digestData.shopifyOnlyProducts
-    );
-    attachments.push({
-      content: Buffer.from(missingProductsCsv).toString('base64'),
-      filename: `missing-products-${new Date().toISOString().split('T')[0]}.csv`,
       type: 'text/csv',
     });
   }

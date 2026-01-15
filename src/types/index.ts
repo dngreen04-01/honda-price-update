@@ -59,16 +59,6 @@ export interface ShopifyCatalogCache {
   updated_at: string;
 }
 
-export interface ReconcileResult {
-  id: number;
-  run_id: string;
-  product_type: 'supplier_only' | 'shopify_only';
-  canonical_url: string;
-  status: 'active' | 'redirect' | '404' | 'pending';
-  detected_at: string;
-  resolved_at: string | null;
-}
-
 // Scraper Types
 export interface ExtractedPrice {
   salePrice: number | null;
@@ -131,8 +121,6 @@ export interface PriceChange {
 export interface EmailDigestData {
   priceChanges: PriceChange[];
   newOffers: Offer[];
-  supplierOnlyProducts: string[];
-  shopifyOnlyProducts: string[];
   stats: {
     totalProductsScraped: number;
     successfulExtractions: number;

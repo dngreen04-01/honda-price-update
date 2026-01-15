@@ -9,6 +9,9 @@ interface ScrapeResponse {
     html: string;
     status: number;
     headers: Record<string, string>;
+    final_url?: string;
+    redirect_detected?: boolean;
+    redirect_type?: 'none' | 'category' | 'product' | 'domain' | 'unknown';
   };
 }
 
@@ -18,10 +21,15 @@ export interface ScrapeOptions {
   timeoutMs?: number;
 }
 
+export type RedirectType = 'none' | 'category' | 'product' | 'domain' | 'unknown';
+
 export interface ScrapeResult {
   success: boolean;
   html: string;
   error?: string;
+  finalUrl?: string;
+  redirectDetected?: boolean;
+  redirectType?: RedirectType;
 }
 
 export class ScraplingClient {
@@ -177,15 +185,23 @@ export class ScraplingClient {
     );
 
     if (response.data.success) {
+      const { data } = response.data;
+
       logger.info('Scrapling scrape successful', {
         url,
-        status: response.data.data.status,
-        htmlLength: response.data.data.html.length,
+        status: data.status,
+        htmlLength: data.html.length,
+        finalUrl: data.final_url,
+        redirectDetected: data.redirect_detected,
+        redirectType: data.redirect_type,
       });
 
       return {
         success: true,
-        html: response.data.data.html,
+        html: data.html,
+        finalUrl: data.final_url,
+        redirectDetected: data.redirect_detected,
+        redirectType: data.redirect_type,
       };
     }
 

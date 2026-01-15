@@ -2,7 +2,6 @@
 
 import { scraperOrchestrator } from './scraper/scraper-orchestrator.js';
 import { refreshShopifyCatalogCache } from './shopify/price-sync.js';
-import { reconciliationEngine } from './utils/reconciliation.js';
 import { generateDigestData, generateAttachments } from './email/digest-generator.js';
 import { sendgridClient } from './email/sendgrid-client.js';
 import { logger } from './utils/logger.js';
@@ -27,29 +26,21 @@ async function runNightlyJob(): Promise<void> {
     logger.info('Step 3: Skipping automatic price sync (manual approval required via dashboard)');
     const syncResult = { synced: 0, skipped: 0, failed: 0 };
 
-    // Step 4: Run reconciliation
-    logger.info('Step 4: Running reconciliation');
-    const reconcileResult = await reconciliationEngine.reconcile();
+    // Step 4: Generate email digest data
+    logger.info('Step 4: Generating email digest');
+    const digestData = await generateDigestData({
+      totalProductsScraped: scrapeStats.totalProducts,
+      successfulExtractions: scrapeStats.successfulExtractions,
+      shopifySynced: syncResult.synced,
+      emailsSent: 0, // Will be updated after sending
+    });
 
-    // Step 5: Generate email digest data
-    logger.info('Step 5: Generating email digest');
-    const digestData = await generateDigestData(
-      reconcileResult.supplierOnly,
-      reconcileResult.shopifyOnly,
-      {
-        totalProductsScraped: scrapeStats.totalProducts,
-        successfulExtractions: scrapeStats.successfulExtractions,
-        shopifySynced: syncResult.synced,
-        emailsSent: 0, // Will be updated after sending
-      }
-    );
-
-    // Step 6: Generate CSV attachments
-    logger.info('Step 6: Generating CSV attachments');
+    // Step 5: Generate CSV attachments
+    logger.info('Step 5: Generating CSV attachments');
     const attachments = generateAttachments(digestData);
 
-    // Step 7: Send email digest
-    logger.info('Step 7: Sending email digest');
+    // Step 6: Send email digest
+    logger.info('Step 6: Sending email digest');
     const emailSent = await sendgridClient.sendNightlyDigest(digestData, attachments);
 
     // Update email sent count
@@ -65,8 +56,6 @@ async function runNightlyJob(): Promise<void> {
         successfulExtractions: scrapeStats.successfulExtractions,
         failedExtractions: scrapeStats.failedExtractions,
         pricesSynced: syncResult.synced,
-        supplierOnly: reconcileResult.supplierOnly.length,
-        shopifyOnly: reconcileResult.shopifyOnly.length,
         emailSent,
       },
     });

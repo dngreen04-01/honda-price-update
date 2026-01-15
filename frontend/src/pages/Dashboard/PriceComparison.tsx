@@ -3,7 +3,7 @@ import React, { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { ExternalLink, Code, AlertCircle, TrendingDown, TrendingUp, Search, Filter, Upload, Loader2, Check, RefreshCw } from 'lucide-react'
+import { ExternalLink, Code, AlertCircle, TrendingDown, TrendingUp, Search, Filter, Upload, Loader2, Check, RefreshCw, Square, CheckSquare, MinusSquare } from 'lucide-react'
 import { format } from 'date-fns'
 
 type FilterType = 'all' | 'not_in_shopify' | 'not_in_supplier' | 'prices_matched' | 'prices_unmatched'
@@ -45,6 +45,28 @@ export const PriceComparison: React.FC = () => {
   const [pushSuccess, setPushSuccess] = useState<Set<string>>(new Set())
   const [rescrapingUrl, setRescrapingUrl] = useState<string | null>(null)
   const [rescrapeSuccess, setRescrapeSuccess] = useState<Set<string>>(new Set())
+  const [redirectDialog, setRedirectDialog] = useState<{
+    show: boolean
+    url: string
+    productId: number | null
+    redirectInfo: {
+      detected: boolean
+      originalUrl: string
+      finalUrl: string
+      redirectType: string
+      likelyDiscontinued: boolean
+      suggestedAction: string
+      message: string
+    } | null
+    archiveOnShopify: boolean
+  }>({ show: false, url: '', productId: null, redirectInfo: null, archiveOnShopify: false })
+  const [updatingProduct, setUpdatingProduct] = useState(false)
+
+  // Bulk selection state
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
+  const [bulkRescraping, setBulkRescraping] = useState(false)
+  const [bulkPushing, setBulkPushing] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null)
 
   useEffect(() => {
     loadPriceComparison()
@@ -206,7 +228,18 @@ export const PriceComparison: React.FC = () => {
         // Reload data to show updated prices
         await loadPriceComparison()
       } else {
-        alert(`Re-scrape failed: ${result.message || 'Unknown error'}`)
+        // Check if this is a redirect issue
+        if (result.redirectInfo?.detected) {
+          setRedirectDialog({
+            show: true,
+            url,
+            productId: result.data?.productId || null,
+            redirectInfo: result.redirectInfo,
+            archiveOnShopify: false
+          })
+        } else {
+          alert(`Re-scrape failed: ${result.message || 'Unknown error'}`)
+        }
       }
     } catch (error) {
       console.error('Error re-scraping:', error)
@@ -214,6 +247,210 @@ export const PriceComparison: React.FC = () => {
     } finally {
       setRescrapingUrl(null)
     }
+  }
+
+  const handleRedirectAction = async (action: 'update_url' | 'mark_discontinued' | 'ignore', newUrl?: string) => {
+    if (!redirectDialog.productId) {
+      alert('No product ID available')
+      setRedirectDialog({ show: false, url: '', productId: null, redirectInfo: null, archiveOnShopify: false })
+      return
+    }
+
+    setUpdatingProduct(true)
+
+    try {
+      const response = await fetch('http://localhost:3000/api/update-product-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          productId: redirectDialog.productId,
+          action,
+          newUrl: action === 'update_url' ? newUrl : undefined,
+          archiveOnShopify: action === 'mark_discontinued' ? redirectDialog.archiveOnShopify : undefined,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        alert(result.message)
+        await loadPriceComparison()
+      } else {
+        alert(`Action failed: ${result.message || 'Unknown error'}`)
+      }
+    } catch (error) {
+      console.error('Error updating product:', error)
+      alert(`Error: ${error.message}`)
+    } finally {
+      setUpdatingProduct(false)
+      setRedirectDialog({ show: false, url: '', productId: null, redirectInfo: null, archiveOnShopify: false })
+    }
+  }
+
+  // Bulk selection helpers
+  const toggleSelectItem = (url: string) => {
+    setSelectedItems(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(url)) {
+        newSet.delete(url)
+      } else {
+        newSet.add(url)
+      }
+      return newSet
+    })
+  }
+
+  const toggleSelectAllVisible = () => {
+    const visibleUrls = filteredData.map(row => row.canonical_url).filter(Boolean)
+    const allSelected = visibleUrls.every(url => selectedItems.has(url))
+
+    if (allSelected) {
+      // Deselect all visible
+      setSelectedItems(prev => {
+        const newSet = new Set(prev)
+        visibleUrls.forEach(url => newSet.delete(url))
+        return newSet
+      })
+    } else {
+      // Select all visible
+      setSelectedItems(prev => {
+        const newSet = new Set(prev)
+        visibleUrls.forEach(url => newSet.add(url))
+        return newSet
+      })
+    }
+  }
+
+  const getSelectionState = () => {
+    const visibleUrls = filteredData.map(row => row.canonical_url).filter(Boolean)
+    const selectedVisible = visibleUrls.filter(url => selectedItems.has(url))
+
+    if (selectedVisible.length === 0) return 'none'
+    if (selectedVisible.length === visibleUrls.length) return 'all'
+    return 'partial'
+  }
+
+  // Bulk rescrape action
+  const bulkRescrape = async () => {
+    const urlsToRescrape = Array.from(selectedItems).filter(url =>
+      filteredData.some(row => row.canonical_url === url)
+    )
+
+    if (urlsToRescrape.length === 0) {
+      alert('No items selected for re-scraping')
+      return
+    }
+
+    if (!confirm(`Re-scrape ${urlsToRescrape.length} selected product(s)?`)) {
+      return
+    }
+
+    setBulkRescraping(true)
+    setBulkProgress({ current: 0, total: urlsToRescrape.length })
+
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < urlsToRescrape.length; i++) {
+      const url = urlsToRescrape[i]
+      setBulkProgress({ current: i + 1, total: urlsToRescrape.length })
+
+      try {
+        const response = await fetch('http://localhost:3000/api/rescrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+
+        const result = await response.json()
+
+        if (result.success) {
+          successCount++
+          setRescrapeSuccess(prev => new Set(prev).add(url))
+        } else {
+          failCount++
+        }
+      } catch (error) {
+        console.error('Error re-scraping:', url, error)
+        failCount++
+      }
+    }
+
+    setBulkRescraping(false)
+    setBulkProgress(null)
+    setSelectedItems(new Set())
+
+    // Clear success indicators after delay
+    setTimeout(() => {
+      setRescrapeSuccess(new Set())
+    }, 3000)
+
+    alert(`Bulk re-scrape complete!\n✓ Success: ${successCount}\n✗ Failed: ${failCount}`)
+    await loadPriceComparison()
+  }
+
+  // Bulk push to Shopify action
+  const bulkPushToShopify = async () => {
+    const rowsToPush = filteredData.filter(row =>
+      selectedItems.has(row.canonical_url) &&
+      row.supplier_current_price &&
+      row.shopify_product_id &&
+      shouldShowPushButton(row)
+    )
+
+    if (rowsToPush.length === 0) {
+      alert('No eligible items selected for pushing to Shopify.\n\nItems must have:\n- A supplier price\n- A linked Shopify product\n- A price difference')
+      return
+    }
+
+    if (!confirm(`Push prices for ${rowsToPush.length} selected product(s) to Shopify?`)) {
+      return
+    }
+
+    setBulkPushing(true)
+    setBulkProgress({ current: 0, total: rowsToPush.length })
+
+    let successCount = 0
+    let failCount = 0
+
+    for (let i = 0; i < rowsToPush.length; i++) {
+      const row = rowsToPush[i]
+      setBulkProgress({ current: i + 1, total: rowsToPush.length })
+
+      try {
+        const response = await fetch('http://localhost:3000/api/price-sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: [row.canonical_url] }),
+        })
+
+        const result = await response.json()
+
+        if (result.success && result.synced > 0) {
+          successCount++
+          setPushSuccess(prev => new Set(prev).add(row.canonical_url))
+        } else {
+          failCount++
+        }
+      } catch (error) {
+        console.error('Error pushing price:', row.canonical_url, error)
+        failCount++
+      }
+    }
+
+    setBulkPushing(false)
+    setBulkProgress(null)
+    setSelectedItems(new Set())
+
+    // Clear success indicators after delay
+    setTimeout(() => {
+      setPushSuccess(new Set())
+    }, 3000)
+
+    alert(`Bulk push complete!\n✓ Success: ${successCount}\n✗ Failed: ${failCount}`)
+    await loadPriceComparison()
   }
 
   // Filter data based on search term and filter type
@@ -476,11 +713,101 @@ export const PriceComparison: React.FC = () => {
             )}
           </div>
 
+          {/* Bulk Actions Bar */}
+          <div className="mb-4 flex items-center gap-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                {selectedItems.size > 0 ? (
+                  <>
+                    <span className="text-blue-600 dark:text-blue-400">{selectedItems.size}</span> selected
+                  </>
+                ) : (
+                  'Select items for bulk actions'
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 ml-auto">
+              {/* Bulk Rescrape Button */}
+              <button
+                onClick={bulkRescrape}
+                disabled={selectedItems.size === 0 || bulkRescraping || bulkPushing}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  selectedItems.size === 0 || bulkRescraping || bulkPushing
+                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                    : 'bg-gray-600 text-white hover:bg-gray-700'
+                }`}
+              >
+                {bulkRescraping ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Re-scraping {bulkProgress?.current}/{bulkProgress?.total}...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    Bulk Re-scrape
+                  </>
+                )}
+              </button>
+
+              {/* Bulk Push to Shopify Button */}
+              <button
+                onClick={bulkPushToShopify}
+                disabled={selectedItems.size === 0 || bulkRescraping || bulkPushing}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  selectedItems.size === 0 || bulkRescraping || bulkPushing
+                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }`}
+              >
+                {bulkPushing ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Pushing {bulkProgress?.current}/{bulkProgress?.total}...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-4 w-4" />
+                    Bulk Push to Shopify
+                  </>
+                )}
+              </button>
+
+              {/* Clear Selection Button */}
+              {selectedItems.size > 0 && (
+                <button
+                  onClick={() => setSelectedItems(new Set())}
+                  disabled={bulkRescraping || bulkPushing}
+                  className="inline-flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-200 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="border-b">
+                  <th className="text-center p-3 font-medium w-10">
+                    <button
+                      onClick={toggleSelectAllVisible}
+                      disabled={filteredData.length === 0 || bulkRescraping || bulkPushing}
+                      className="inline-flex items-center justify-center text-gray-600 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title={getSelectionState() === 'all' ? 'Deselect all visible' : 'Select all visible'}
+                    >
+                      {getSelectionState() === 'all' ? (
+                        <CheckSquare className="h-5 w-5 text-blue-600" />
+                      ) : getSelectionState() === 'partial' ? (
+                        <MinusSquare className="h-5 w-5 text-blue-600" />
+                      ) : (
+                        <Square className="h-5 w-5" />
+                      )}
+                    </button>
+                  </th>
                   <th className="text-left p-3 font-medium">Product</th>
                   <th className="text-left p-3 font-medium">SKU</th>
                   <th className="text-right p-3 font-medium">Supplier Price</th>
@@ -497,7 +824,21 @@ export const PriceComparison: React.FC = () => {
                 {filteredData.length > 0 ? (
                   filteredData.map((row) => (
                     <React.Fragment key={row.id}>
-                      <tr className="border-b hover:bg-gray-50 dark:hover:bg-gray-800">
+                      <tr className={`border-b hover:bg-gray-50 dark:hover:bg-gray-800 ${selectedItems.has(row.canonical_url) ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}>
+                        {/* Checkbox */}
+                        <td className="p-3 text-center">
+                          <button
+                            onClick={() => toggleSelectItem(row.canonical_url)}
+                            disabled={bulkRescraping || bulkPushing}
+                            className="inline-flex items-center justify-center text-gray-600 hover:text-blue-600 dark:text-gray-400 dark:hover:text-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {selectedItems.has(row.canonical_url) ? (
+                              <CheckSquare className="h-5 w-5 text-blue-600" />
+                            ) : (
+                              <Square className="h-5 w-5" />
+                            )}
+                          </button>
+                        </td>
                         {/* Product Info */}
                         <td className="p-3">
                           <div className="space-y-1">
@@ -762,7 +1103,7 @@ export const PriceComparison: React.FC = () => {
                       {/* Code Snippet Row (Expandable) */}
                       {showSnippet === row.id && row.supplier_html_snippet && (
                         <tr className="border-b bg-gray-50 dark:bg-gray-900">
-                          <td colSpan={10} className="p-4">
+                          <td colSpan={11} className="p-4">
                             <div>
                               <p className="text-sm font-medium mb-2 flex items-center gap-2">
                                 <Code className="h-4 w-4" />
@@ -779,7 +1120,7 @@ export const PriceComparison: React.FC = () => {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-muted-foreground">
+                    <td colSpan={11} className="p-8 text-center text-muted-foreground">
                       {searchTerm ? 'No results found' : 'No price data available'}
                     </td>
                   </tr>
@@ -789,6 +1130,111 @@ export const PriceComparison: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Redirect Detection Dialog */}
+      {redirectDialog.show && redirectDialog.redirectInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full mx-4 p-6">
+            <div className="flex items-start gap-3 mb-4">
+              <AlertCircle className="h-6 w-6 text-orange-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Product URL Redirect Detected
+                </h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {redirectDialog.redirectInfo.message}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 mb-4 space-y-2">
+              <div>
+                <span className="text-xs font-medium text-muted-foreground">Original URL:</span>
+                <p className="text-sm font-mono break-all">{redirectDialog.redirectInfo.originalUrl}</p>
+              </div>
+              <div>
+                <span className="text-xs font-medium text-muted-foreground">Redirected to:</span>
+                <p className="text-sm font-mono break-all text-orange-600">{redirectDialog.redirectInfo.finalUrl}</p>
+              </div>
+              <div>
+                <span className="text-xs font-medium text-muted-foreground">Redirect Type:</span>
+                <span className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
+                  redirectDialog.redirectInfo.redirectType === 'category'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-yellow-100 text-yellow-700'
+                }`}>
+                  {redirectDialog.redirectInfo.redirectType}
+                </span>
+              </div>
+            </div>
+
+            {redirectDialog.redirectInfo.likelyDiscontinued && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 mb-4">
+                <p className="text-sm text-red-700 dark:text-red-400 flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4" />
+                  This product is likely discontinued by the supplier.
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">What would you like to do?</p>
+
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => {
+                    const newUrl = prompt('Enter the new URL for this product:', redirectDialog.redirectInfo?.finalUrl || '')
+                    if (newUrl) {
+                      handleRedirectAction('update_url', newUrl)
+                    }
+                  }}
+                  disabled={updatingProduct}
+                  className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Update URL
+                </button>
+
+                <div className="space-y-2">
+                  <button
+                    onClick={() => handleRedirectAction('mark_discontinued')}
+                    disabled={updatingProduct}
+                    className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                    Mark as Discontinued
+                  </button>
+
+                  <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer pl-1">
+                    <input
+                      type="checkbox"
+                      checked={redirectDialog.archiveOnShopify}
+                      onChange={(e) => setRedirectDialog(prev => ({ ...prev, archiveOnShopify: e.target.checked }))}
+                      className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+                    />
+                    Also archive product on Shopify
+                  </label>
+                </div>
+
+                <button
+                  onClick={() => handleRedirectAction('ignore')}
+                  disabled={updatingProduct}
+                  className="w-full px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Ignore for Now
+                </button>
+              </div>
+            </div>
+
+            {updatingProduct && (
+              <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Processing...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
