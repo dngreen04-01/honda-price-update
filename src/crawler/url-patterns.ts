@@ -331,7 +331,14 @@ export function isOfferPage(url: string): boolean {
     const path = new URL(url).pathname.toLowerCase();
 
     // Match various offer-related URL patterns
-    return /\/(offers?|promotions?|specials?|deals?|sale|discount|clearance)\//i.test(path);
+    // Pattern matches:
+    //   /offers/ (root offers page)
+    //   /offers/summer-sale (offer subpage without trailing slash)
+    //   /offers/summer-sale/ (offer subpage with trailing slash)
+    //   /promotions/some-promo (promotions page)
+    // But NOT:
+    //   /offers (exactly, without trailing slash - that's usually a redirect)
+    return /\/(offers?|promotions?|specials?|deals?|sale|discount|clearance)(\/|$)/i.test(path);
   } catch {
     return false;
   }

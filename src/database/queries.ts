@@ -7,6 +7,7 @@ import {
   Domain,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { extractProductId } from '../utils/extract-product-id.js';
 
 // Shopify Catalog Cache
 export async function upsertShopifyCatalogCache(
@@ -77,6 +78,67 @@ export async function getShopifyProductUrls(): Promise<Set<string>> {
 
   // Return as Set for fast lookup
   return new Set(data.map(row => row.source_url_canonical));
+}
+
+/**
+ * Get all variant SKUs from the Shopify catalog for product matching.
+ * Used to detect if a discovered product already exists by SKU.
+ *
+ * @returns Set of existing SKUs (lowercase for case-insensitive matching)
+ */
+export async function getExistingProductSkus(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('shopify_catalog_cache')
+    .select('variant_sku')
+    .not('variant_sku', 'is', null);
+
+  if (error) {
+    logger.error('Failed to fetch existing product SKUs', { error: error.message });
+    throw error;
+  }
+
+  // Return as Set with lowercase for case-insensitive matching
+  return new Set(
+    data
+      .map(row => row.variant_sku?.toLowerCase())
+      .filter((sku): sku is string => sku !== undefined && sku !== null)
+  );
+}
+
+/**
+ * Get product IDs extracted from existing canonical URLs.
+ * This handles cases where the same product appears at different URL paths
+ * (e.g., /08l78mkse00 vs /honda-genuine-accessories/08l78mkse00).
+ *
+ * @returns Set of product IDs extracted from URL paths (lowercase)
+ */
+export async function getExistingProductIds(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('shopify_catalog_cache')
+    .select('source_url_canonical')
+    .not('source_url_canonical', 'is', null);
+
+  if (error) {
+    logger.error('Failed to fetch existing product URLs for ID extraction', {
+      error: error.message,
+    });
+    throw error;
+  }
+
+  const productIds = new Set<string>();
+  for (const row of data) {
+    const productId = extractProductId(row.source_url_canonical);
+    if (productId) {
+      productIds.add(productId);
+    }
+  }
+
+  logger.debug('Extracted product IDs from existing URLs', {
+    urlCount: data.length,
+    productIdCount: productIds.size,
+  });
+
+  return productIds;
 }
 
 export async function updateScrapedPrices(
@@ -658,6 +720,35 @@ export async function updateDiscoveredProductStatus(
 }
 
 /**
+ * Get a single discovered product by ID
+ * @param id - The discovered product ID
+ * @returns The discovered product or null if not found
+ */
+export async function getDiscoveredProductById(
+  id: number
+): Promise<DiscoveredProduct | null> {
+  const { data, error } = await supabase
+    .from('discovered_products')
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') {
+      // No rows returned
+      return null;
+    }
+    logger.error('Failed to fetch discovered product by ID', {
+      error: error.message,
+      id,
+    });
+    throw error;
+  }
+
+  return data as DiscoveredProduct;
+}
+
+/**
  * Get count of discovered products by status
  * @returns Object with counts per status
  */
@@ -865,5 +956,193 @@ export async function updateOfferLastSeen(offerId: number): Promise<void> {
     });
     throw error;
   }
+}
+
+// ============================================================================
+// Discovery Deduplication Queries
+// ============================================================================
+
+/**
+ * Get product IDs from existing discovered products (pending or reviewed).
+ * Used to prevent re-discovering products that are already in the discoveries queue.
+ *
+ * @returns Set of product IDs extracted from discovered product URLs (lowercase)
+ */
+export async function getDiscoveredProductIds(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('discovered_products')
+    .select('url_canonical')
+    .in('status', ['pending', 'reviewed']);
+
+  if (error) {
+    logger.error('Failed to fetch discovered product URLs for ID extraction', {
+      error: error.message,
+    });
+    throw error;
+  }
+
+  const productIds = new Set<string>();
+  for (const row of data) {
+    const productId = extractProductId(row.url_canonical);
+    if (productId) {
+      productIds.add(productId);
+    }
+  }
+
+  logger.debug('Extracted product IDs from discovered products', {
+    urlCount: data.length,
+    productIdCount: productIds.size,
+  });
+
+  return productIds;
+}
+
+/**
+ * Represents a duplicate discovery found in the database
+ */
+export interface DuplicateDiscovery {
+  id: number;
+  url: string;
+  url_canonical: string;
+  product_id: string;
+  status: string;
+}
+
+/**
+ * Find duplicate discoveries that share the same product ID (last path segment).
+ * Returns duplicates that should be deleted (keeps the one with shortest URL).
+ *
+ * @returns Array of duplicate discoveries to delete
+ */
+export async function findDuplicateDiscoveries(): Promise<DuplicateDiscovery[]> {
+  // Fetch all pending/reviewed discoveries
+  const { data, error } = await supabase
+    .from('discovered_products')
+    .select('id, url, url_canonical, status, created_at')
+    .in('status', ['pending', 'reviewed'])
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    logger.error('Failed to fetch discovered products for deduplication', {
+      error: error.message,
+    });
+    throw error;
+  }
+
+  // Group by product ID
+  const productIdMap = new Map<
+    string,
+    Array<{
+      id: number;
+      url: string;
+      url_canonical: string;
+      status: string;
+      created_at: string;
+    }>
+  >();
+
+  for (const row of data) {
+    const productId = extractProductId(row.url_canonical);
+    if (productId && productId.length >= 3) {
+      const existing = productIdMap.get(productId) || [];
+      existing.push(row);
+      productIdMap.set(productId, existing);
+    }
+  }
+
+  // Find duplicates - keep the one with shortest URL, mark others for deletion
+  const duplicates: DuplicateDiscovery[] = [];
+
+  for (const [productId, rows] of productIdMap) {
+    if (rows.length > 1) {
+      // Sort by URL length (ascending), then by created_at (ascending)
+      rows.sort((a, b) => {
+        const lenDiff = a.url_canonical.length - b.url_canonical.length;
+        if (lenDiff !== 0) return lenDiff;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+
+      // First one is kept, rest are duplicates
+      for (let i = 1; i < rows.length; i++) {
+        duplicates.push({
+          id: rows[i].id,
+          url: rows[i].url,
+          url_canonical: rows[i].url_canonical,
+          product_id: productId,
+          status: rows[i].status,
+        });
+      }
+
+      logger.debug('Found duplicate discoveries', {
+        productId,
+        kept: rows[0].url_canonical,
+        duplicates: rows.slice(1).map((r) => r.url_canonical),
+      });
+    }
+  }
+
+  logger.info('Duplicate discovery analysis complete', {
+    totalProducts: productIdMap.size,
+    duplicatesFound: duplicates.length,
+  });
+
+  return duplicates;
+}
+
+/**
+ * Delete a discovered product by ID
+ * @param id - The discovered product ID to delete
+ * @returns Whether the deletion was successful
+ */
+export async function deleteDiscoveredProductById(id: number): Promise<boolean> {
+  const { error, count } = await supabase
+    .from('discovered_products')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    logger.error('Failed to delete discovered product', {
+      error: error.message,
+      id,
+    });
+    throw error;
+  }
+
+  const deleted = (count ?? 0) > 0 || !error;
+  if (deleted) {
+    logger.debug('Deleted discovered product', { id });
+  }
+
+  return deleted;
+}
+
+/**
+ * Delete multiple discovered products by their IDs
+ * @param ids - Array of discovered product IDs to delete
+ * @returns Number of products deleted
+ */
+export async function deleteDiscoveredProductsByIds(ids: number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+
+  const { error, count } = await supabase
+    .from('discovered_products')
+    .delete()
+    .in('id', ids);
+
+  if (error) {
+    logger.error('Failed to delete discovered products', {
+      error: error.message,
+      count: ids.length,
+    });
+    throw error;
+  }
+
+  const deletedCount = count ?? ids.length;
+  logger.info('Deleted duplicate discovered products', {
+    requestedCount: ids.length,
+    deletedCount,
+  });
+
+  return deletedCount;
 }
 

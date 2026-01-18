@@ -3,7 +3,7 @@ import React, { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { ExternalLink, Code, AlertCircle, TrendingDown, TrendingUp, Search, Filter, Upload, Loader2, Check, RefreshCw, Square, CheckSquare, MinusSquare } from 'lucide-react'
+import { ExternalLink, Code, AlertCircle, TrendingDown, TrendingUp, Search, Filter, Upload, Loader2, Check, RefreshCw, Square, CheckSquare, MinusSquare, ChevronDown } from 'lucide-react'
 import { format } from 'date-fns'
 
 type FilterType = 'all' | 'not_in_shopify' | 'not_in_supplier' | 'prices_matched' | 'prices_unmatched'
@@ -67,6 +67,16 @@ export const PriceComparison: React.FC = () => {
   const [bulkRescraping, setBulkRescraping] = useState(false)
   const [bulkPushing, setBulkPushing] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null)
+
+  // Supplier re-scrape state
+  type SupplierType = 'motorbikes' | 'outdoors' | 'marine'
+  const [supplierDropdownOpen, setSupplierDropdownOpen] = useState(false)
+  const [supplierRescrapeJob, setSupplierRescrapeJob] = useState<{
+    jobId: string
+    supplier: SupplierType
+    status: 'running' | 'completed' | 'failed'
+    progress: { current: number; total: number; success: number; failed: number; priceChanges: number }
+  } | null>(null)
 
   useEffect(() => {
     loadPriceComparison()
@@ -453,6 +463,94 @@ export const PriceComparison: React.FC = () => {
     await loadPriceComparison()
   }
 
+  // Supplier re-scrape functions
+  const SUPPLIER_LABELS: Record<SupplierType, string> = {
+    motorbikes: 'Honda Motorbikes',
+    outdoors: 'Honda Outdoors',
+    marine: 'Honda Marine',
+  }
+
+  const startSupplierRescrape = async (supplier: SupplierType) => {
+    setSupplierDropdownOpen(false)
+
+    if (!confirm(`Re-scrape all products from ${SUPPLIER_LABELS[supplier]}?\n\nThis will update prices for all products from this supplier. This may take several minutes.`)) {
+      return
+    }
+
+    try {
+      const response = await fetch('http://localhost:3000/api/supplier-rescrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supplier }),
+      })
+
+      const result = await response.json()
+
+      if (result.success) {
+        setSupplierRescrapeJob({
+          jobId: result.jobId,
+          supplier,
+          status: 'running',
+          progress: { current: 0, total: 0, success: 0, failed: 0, priceChanges: 0 },
+        })
+      } else {
+        alert(`Failed to start re-scrape: ${result.message}`)
+      }
+    } catch (error) {
+      console.error('Error starting supplier re-scrape:', error)
+      alert(`Error: ${error.message}`)
+    }
+  }
+
+  // Poll job status when a supplier re-scrape is running
+  useEffect(() => {
+    if (!supplierRescrapeJob || supplierRescrapeJob.status !== 'running') {
+      return
+    }
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`http://localhost:3000/api/supplier-rescrape/${supplierRescrapeJob.jobId}`)
+        const result = await response.json()
+
+        if (result.success && result.job) {
+          const job = result.job
+          setSupplierRescrapeJob({
+            jobId: job.id,
+            supplier: job.supplier,
+            status: job.status,
+            progress: {
+              current: job.current,
+              total: job.total,
+              success: job.success,
+              failed: job.failed,
+              priceChanges: job.priceChanges,
+            },
+          })
+
+          // Job completed or failed
+          if (job.status === 'completed' || job.status === 'failed') {
+            clearInterval(pollInterval)
+
+            if (job.status === 'completed') {
+              alert(`Re-scrape complete for ${SUPPLIER_LABELS[job.supplier]}!\n\n✓ Successful: ${job.success}\n✗ Failed: ${job.failed}\n📊 Price changes: ${job.priceChanges}`)
+              await loadPriceComparison()
+            } else {
+              alert(`Re-scrape failed for ${SUPPLIER_LABELS[job.supplier]}. Check the server logs for details.`)
+            }
+
+            // Clear the job state after a short delay
+            setTimeout(() => setSupplierRescrapeJob(null), 2000)
+          }
+        }
+      } catch (error) {
+        console.error('Error polling job status:', error)
+      }
+    }, 2000) // Poll every 2 seconds
+
+    return () => clearInterval(pollInterval)
+  }, [supplierRescrapeJob?.jobId, supplierRescrapeJob?.status])
+
   // Filter data based on search term and filter type
   const filteredData = useMemo(() => {
     let data = priceData
@@ -605,17 +703,79 @@ export const PriceComparison: React.FC = () => {
                 {filteredData.length} of {allStats.total} products shown
               </CardDescription>
             </div>
-            <button
-              onClick={() => {
-                setLoading(true)
-                loadPriceComparison()
-              }}
-              disabled={loading}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-              {loading ? 'Refreshing...' : 'Refresh Data'}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Supplier Re-scrape Dropdown */}
+              <div className="relative">
+                <button
+                  onClick={() => setSupplierDropdownOpen(!supplierDropdownOpen)}
+                  disabled={!!supplierRescrapeJob}
+                  className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
+                    supplierRescrapeJob
+                      ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                      : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  {supplierRescrapeJob ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>
+                        Re-scraping {SUPPLIER_LABELS[supplierRescrapeJob.supplier]}...
+                        {supplierRescrapeJob.progress.total > 0 && (
+                          <span className="ml-1">
+                            ({supplierRescrapeJob.progress.current}/{supplierRescrapeJob.progress.total})
+                          </span>
+                        )}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4" />
+                      Re-scrape Supplier
+                      <ChevronDown className="h-4 w-4" />
+                    </>
+                  )}
+                </button>
+
+                {/* Dropdown Menu */}
+                {supplierDropdownOpen && !supplierRescrapeJob && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700 z-10">
+                    <div className="py-1">
+                      <button
+                        onClick={() => startSupplierRescrape('motorbikes')}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Honda Motorbikes
+                      </button>
+                      <button
+                        onClick={() => startSupplierRescrape('outdoors')}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Honda Outdoors
+                      </button>
+                      <button
+                        onClick={() => startSupplierRescrape('marine')}
+                        className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        Honda Marine
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Refresh Data Button */}
+              <button
+                onClick={() => {
+                  setLoading(true)
+                  loadPriceComparison()
+                }}
+                disabled={loading}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                {loading ? 'Refreshing...' : 'Refresh Data'}
+              </button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

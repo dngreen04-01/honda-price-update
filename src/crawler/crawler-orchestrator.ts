@@ -43,13 +43,59 @@ const CRAWL_CONFIG = {
 };
 
 /**
- * Honda NZ sites to crawl
+ * Honda NZ sites to crawl with their seed URLs
+ * Each site has a base URL plus additional pages to ensure thorough coverage
  */
-export const HONDA_SITES = [
-  'https://www.hondamotorbikes.co.nz',
-  'https://www.hondaoutdoors.co.nz',
-  'https://www.hondamarine.co.nz',
+export const HONDA_SITES_CONFIG = [
+  {
+    baseUrl: 'https://www.hondamotorbikes.co.nz',
+    seedUrls: [
+      'https://www.hondamotorbikes.co.nz',
+      'https://www.hondamotorbikes.co.nz/offers/',
+      'https://www.hondamotorbikes.co.nz/motorcycles/',
+    ],
+  },
+  {
+    baseUrl: 'https://www.hondaoutdoors.co.nz',
+    seedUrls: [
+      'https://www.hondaoutdoors.co.nz',
+      'https://www.hondaoutdoors.co.nz/offers/',
+      'https://www.hondaoutdoors.co.nz/lawn-garden/',
+      'https://www.hondaoutdoors.co.nz/generators/',
+    ],
+  },
+  {
+    baseUrl: 'https://www.hondamarine.co.nz',
+    seedUrls: [
+      'https://www.hondamarine.co.nz',
+      'https://www.hondamarine.co.nz/offers/',
+      'https://www.hondamarine.co.nz/outboards/',
+    ],
+  },
 ];
+
+/** Simple list of base URLs for backwards compatibility */
+export const HONDA_SITES = HONDA_SITES_CONFIG.map((s) => s.baseUrl);
+
+/**
+ * Callback for incremental batch saves
+ * Called periodically with new discoveries to save to database
+ */
+export type BatchSaveCallback = (discoveries: DiscoveredUrl[], stats: BatchStats) => Promise<void>;
+
+/**
+ * Statistics for batch saves
+ */
+export interface BatchStats {
+  /** Total URLs visited so far */
+  totalVisited: number;
+  /** Total discoveries so far */
+  totalDiscoveries: number;
+  /** Products discovered so far */
+  productsDiscovered: number;
+  /** Offers discovered so far */
+  offersDiscovered: number;
+}
 
 /**
  * Options for configuring a crawl run
@@ -63,8 +109,16 @@ export interface CrawlOptions {
   minDelay?: number;
   /** Maximum delay between requests in ms (default: 60000) */
   maxDelay?: number;
-  /** Whether to skip delay between sites (for testing) */
+  /** Whether to skip delay between sites (for testing) - ignored when parallel=true */
   skipSiteDelay?: boolean;
+  /** Crawl all sites in parallel (default: true) */
+  parallel?: boolean;
+  /** Callback for incremental batch saves (called every batchSize discoveries or batchIntervalMs) */
+  onBatchReady?: BatchSaveCallback;
+  /** Number of discoveries to accumulate before triggering batch save (default: 50) */
+  batchSize?: number;
+  /** Maximum time between batch saves in ms (default: 600000 = 10 minutes) */
+  batchIntervalMs?: number;
 }
 
 /**
@@ -138,6 +192,16 @@ export class CrawlerOrchestrator {
   private isRunning: boolean = false;
   /** URLs already being tracked in the database (to skip during discovery) */
   private existingTrackedUrls: Set<string> = new Set();
+  /** Index of last discovery that was saved (for incremental batch saves) */
+  private lastSavedIndex: number = 0;
+  /** Timestamp of last batch save */
+  private lastBatchSaveTime: number = 0;
+  /** Batch save callback (if provided) */
+  private onBatchReady?: BatchSaveCallback;
+  /** Batch size threshold */
+  private batchSize: number = 50;
+  /** Batch interval in ms */
+  private batchIntervalMs: number = 600000; // 10 minutes
 
   /**
    * Start a crawl of Honda NZ websites
@@ -153,22 +217,28 @@ export class CrawlerOrchestrator {
     const startTime = Date.now();
 
     // Filter sites if specific ones requested
-    const sites = options?.sites
-      ? HONDA_SITES.filter((s) => options.sites!.some((site) => s.toLowerCase().includes(site.toLowerCase())))
-      : HONDA_SITES;
+    const siteConfigs = options?.sites
+      ? HONDA_SITES_CONFIG.filter((s) => options.sites!.some((site) => s.baseUrl.toLowerCase().includes(site.toLowerCase())))
+      : HONDA_SITES_CONFIG;
 
-    if (sites.length === 0) {
+    if (siteConfigs.length === 0) {
       throw new Error('No matching sites found for the specified filter');
     }
 
     const maxPages = options?.maxPagesPerSite ?? CRAWL_CONFIG.maxPagesPerSite;
     const minDelay = options?.minDelay ?? CRAWL_CONFIG.minDelayBetweenRequests;
     const maxDelay = options?.maxDelay ?? CRAWL_CONFIG.maxDelayBetweenRequests;
+    const parallelCrawl = options?.parallel ?? true; // Default to parallel crawling
 
     // Reset state for new crawl
     this.visited.clear();
     this.discoveries = [];
     this.errors = [];
+    this.lastSavedIndex = 0;
+    this.lastBatchSaveTime = Date.now();
+    this.onBatchReady = options?.onBatchReady;
+    this.batchSize = options?.batchSize ?? 50;
+    this.batchIntervalMs = options?.batchIntervalMs ?? 600000; // 10 minutes
 
     // Load existing tracked URLs from database to avoid re-discovering them
     try {
@@ -184,25 +254,50 @@ export class CrawlerOrchestrator {
     }
 
     logger.info('Starting crawler', {
-      sites: sites.map((s) => new URL(s).hostname),
+      sites: siteConfigs.map((s) => new URL(s.baseUrl).hostname),
       maxPagesPerSite: maxPages,
       minDelayMs: minDelay,
       maxDelayMs: maxDelay,
+      parallel: parallelCrawl,
     });
 
     try {
-      for (let i = 0; i < sites.length; i++) {
-        const site = sites[i];
-        logger.info(`Crawling site ${i + 1}/${sites.length}`, { site });
+      if (parallelCrawl) {
+        // Crawl all sites in parallel for faster completion
+        logger.info('Starting parallel crawl of all sites', {
+          siteCount: siteConfigs.length,
+        });
 
-        await this.crawlSite(site, maxPages, minDelay, maxDelay);
+        const crawlPromises = siteConfigs.map((siteConfig) =>
+          this.crawlSite(siteConfig.baseUrl, siteConfig.seedUrls, maxPages, minDelay, maxDelay)
+            .catch((error) => {
+              logger.error('Site crawl failed', {
+                site: siteConfig.baseUrl,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              this.errors.push({
+                url: siteConfig.baseUrl,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            })
+        );
 
-        // Delay between sites (except after last site)
-        if (i < sites.length - 1 && !options?.skipSiteDelay) {
-          logger.info('Waiting between sites', {
-            delayMs: CRAWL_CONFIG.delayBetweenSites,
-          });
-          await this.sleep(CRAWL_CONFIG.delayBetweenSites);
+        await Promise.all(crawlPromises);
+      } else {
+        // Sequential crawl (legacy behavior)
+        for (let i = 0; i < siteConfigs.length; i++) {
+          const siteConfig = siteConfigs[i];
+          logger.info(`Crawling site ${i + 1}/${siteConfigs.length}`, { site: siteConfig.baseUrl });
+
+          await this.crawlSite(siteConfig.baseUrl, siteConfig.seedUrls, maxPages, minDelay, maxDelay);
+
+          // Delay between sites (except after last site)
+          if (i < siteConfigs.length - 1 && !options?.skipSiteDelay) {
+            logger.info('Waiting between sites', {
+              delayMs: CRAWL_CONFIG.delayBetweenSites,
+            });
+            await this.sleep(CRAWL_CONFIG.delayBetweenSites);
+          }
         }
       }
     } finally {
@@ -217,7 +312,7 @@ export class CrawlerOrchestrator {
       newProductsFound: this.discoveries.filter((d) => !d.isOffer).length,
       newOffersFound: this.discoveries.filter((d) => d.isOffer).length,
       discoveries: this.discoveries,
-      sitesCrawled: sites,
+      sitesCrawled: siteConfigs.map((s) => s.baseUrl),
       durationMs,
       errors: this.errors,
     };
@@ -236,19 +331,24 @@ export class CrawlerOrchestrator {
 
   /**
    * Crawl a single site using breadth-first search
+   * @param baseUrl - The base URL of the site
+   * @param seedUrls - Additional URLs to seed the crawl queue (e.g., /offers/)
    */
   private async crawlSite(
     baseUrl: string,
+    seedUrls: string[],
     maxPages: number,
     minDelay: number,
     maxDelay: number
   ): Promise<void> {
-    const queue: QueueItem[] = [{ url: baseUrl, depth: 0 }];
+    // Initialize queue with all seed URLs at depth 0
+    const queue: QueueItem[] = seedUrls.map((url) => ({ url, depth: 0 }));
     let pagesVisited = 0;
     const domain = new URL(baseUrl).hostname;
 
     logger.info(`Starting site crawl`, {
       domain,
+      seedUrls: seedUrls.length,
       maxPages,
     });
 
@@ -306,7 +406,10 @@ export class CrawlerOrchestrator {
             (q) => canonicalizeUrl(q.url) === linkCanonical
           );
           if (!alreadyInQueue) {
-            queue.push({ url: link, depth: getPathDepth(link) });
+            // Prioritize offer pages by giving them depth 0 (same as seed URLs)
+            // This ensures offer subpages are crawled early, not deprioritized
+            const linkDepth = isOfferPage(link) ? 0 : getPathDepth(link);
+            queue.push({ url: link, depth: linkDepth });
           }
         }
       }
@@ -349,6 +452,9 @@ export class CrawlerOrchestrator {
           offerTitle: discovery.offerTitle,
           offerEndDate: discovery.offerEndDate?.toISOString(),
         });
+
+        // Check if we should flush discoveries to database
+        await this.checkAndFlushBatch();
       }
 
       // Progress logging
@@ -395,6 +501,85 @@ export class CrawlerOrchestrator {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Check if batch save should be triggered and execute if needed
+   * Saves when: discoveries since last save >= batchSize OR time since last save >= batchIntervalMs
+   */
+  private async checkAndFlushBatch(): Promise<void> {
+    if (!this.onBatchReady) return;
+
+    const unsavedCount = this.discoveries.length - this.lastSavedIndex;
+    const timeSinceLastSave = Date.now() - this.lastBatchSaveTime;
+
+    const shouldFlush = unsavedCount >= this.batchSize ||
+                        (unsavedCount > 0 && timeSinceLastSave >= this.batchIntervalMs);
+
+    if (shouldFlush) {
+      const newDiscoveries = this.discoveries.slice(this.lastSavedIndex);
+
+      const stats: BatchStats = {
+        totalVisited: this.visited.size,
+        totalDiscoveries: this.discoveries.length,
+        productsDiscovered: this.discoveries.filter(d => !d.isOffer).length,
+        offersDiscovered: this.discoveries.filter(d => d.isOffer).length,
+      };
+
+      logger.info('Flushing discovery batch to database', {
+        batchSize: newDiscoveries.length,
+        totalDiscoveries: this.discoveries.length,
+        timeSinceLastSaveMs: timeSinceLastSave,
+        products: newDiscoveries.filter(d => !d.isOffer).length,
+        offers: newDiscoveries.filter(d => d.isOffer).length,
+      });
+
+      try {
+        await this.onBatchReady(newDiscoveries, stats);
+        this.lastSavedIndex = this.discoveries.length;
+        this.lastBatchSaveTime = Date.now();
+
+        logger.info('Batch save completed successfully', {
+          savedCount: newDiscoveries.length,
+          totalSaved: this.lastSavedIndex,
+        });
+      } catch (error) {
+        logger.error('Batch save failed - will retry on next flush', {
+          error: error instanceof Error ? error.message : String(error),
+          batchSize: newDiscoveries.length,
+        });
+        // Don't update lastSavedIndex so we retry these items
+      }
+    }
+  }
+
+  /**
+   * Force flush any remaining unsaved discoveries
+   * Called at end of crawl to ensure nothing is lost
+   */
+  async flushRemainingDiscoveries(): Promise<void> {
+    if (!this.onBatchReady) return;
+
+    const unsavedCount = this.discoveries.length - this.lastSavedIndex;
+    if (unsavedCount === 0) return;
+
+    const newDiscoveries = this.discoveries.slice(this.lastSavedIndex);
+
+    const stats: BatchStats = {
+      totalVisited: this.visited.size,
+      totalDiscoveries: this.discoveries.length,
+      productsDiscovered: this.discoveries.filter(d => !d.isOffer).length,
+      offersDiscovered: this.discoveries.filter(d => d.isOffer).length,
+    };
+
+    logger.info('Flushing final discovery batch', {
+      batchSize: newDiscoveries.length,
+      totalDiscoveries: this.discoveries.length,
+    });
+
+    await this.onBatchReady(newDiscoveries, stats);
+    this.lastSavedIndex = this.discoveries.length;
+    this.lastBatchSaveTime = Date.now();
   }
 
   /**

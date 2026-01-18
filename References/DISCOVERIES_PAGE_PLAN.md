@@ -12,15 +12,23 @@ A user can see this working by navigating to `/dashboard/discoveries` after logg
 
 ## Progress
 
-- [ ] Phase 1: Add database types for discovered products and offers
-- [ ] Phase 2: Create the Discoveries page component
-- [ ] Phase 3: Add routing and navigation
-- [ ] Phase 4: Implement filtering and bulk actions
-- [ ] Phase 5: Test end-to-end functionality
+- [x] Phase 1: Add database types for discovered products and offers
+- [x] Phase 2: Create the Discoveries page component
+- [x] Phase 3: Add routing and navigation
+- [x] Phase 4: Implement filtering and bulk actions
+- [x] Phase 5: Test end-to-end functionality
+- [x] Phase 6: Add manual URL entry form for direct Shopify push
 
 ## Surprises & Discoveries
 
-(To be updated during implementation)
+- Phase 2 and Phase 3 were combined since routing/navigation is a natural extension of component creation
+- Used Radar icon for navigation instead of Search (better semantic fit for "discoveries")
+- The component includes filtering by status which was planned for Phase 4, implemented early for better UX
+- Phase 4 added domain filter dropdown with item counts per domain for quick filtering
+- Bulk selection implemented with select-all checkbox (only for pending items) and visual feedback for selected rows
+- Added "Mark Reviewed" as additional bulk action alongside "Ignore Selected" for more workflow flexibility
+- Phase 5 testing discovered API didn't allow 'pending' status for restore functionality - fixed in crawler-api.ts
+- Phase 6 (2026-01-18): Added manual URL entry form with template selection - reused existing scraper infrastructure via new `pushUrlToShopify()` function
 
 ## Decision Log
 
@@ -36,9 +44,38 @@ A user can see this working by navigating to `/dashboard/discoveries` after logg
   Rationale: Users primarily need to see items requiring action. Showing ignored items requires explicit filter selection to keep the default view clean.
   Date/Author: 2026-01-15
 
+- Decision: Bulk selection only available for pending items
+  Rationale: Bulk actions (ignore, mark reviewed) are only meaningful for pending items. Selecting ignored or already-reviewed items would require different workflows (restore vs ignore). Limiting selection to pending items keeps the UI simple and prevents user confusion.
+  Date/Author: 2026-01-16
+
+- Decision: Domain filter shows item counts per domain
+  Rationale: Helps users understand data distribution across domains before filtering. Useful when dealing with discoveries from multiple Honda website domains.
+  Date/Author: 2026-01-16
+
+- Decision: Manual URL entry form added as collapsible card
+  Rationale: Users need ability to add products that weren't auto-discovered by the crawler. Collapsible design keeps the UI clean while providing quick access. Form bypasses discovered_products table and pushes directly to Shopify, but still adds to catalog cache for price tracking.
+  Date/Author: 2026-01-18
+
 ## Outcomes & Retrospective
 
-(To be completed as work proceeds)
+**Completed: 2026-01-16**
+
+**What Worked Well:**
+- Existing API endpoints from crawler implementation provided all needed functionality
+- Reusing UI patterns from PriceComparison.tsx ensured visual consistency
+- Incremental implementation (types → component → routing → features → testing) allowed for focused development
+- Bulk selection with select-all simplified user workflow for managing many discoveries
+
+**Issues Found & Fixed:**
+- API validation didn't include 'pending' status, preventing restore functionality - fixed in crawler-api.ts
+- Pre-existing TypeScript errors in AuthContext.tsx (unrelated to this feature)
+
+**Test Results:**
+- All API endpoints functional: /results, /offers, /stats, /review/:id
+- Status transitions work: pending ↔ ignored, pending → reviewed, pending → added
+- Bulk actions work correctly for multiple selections
+- Filtering by status and domain works as expected
+- Stats update immediately after status changes
 
 ## Context and Orientation
 

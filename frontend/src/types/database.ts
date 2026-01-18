@@ -322,3 +322,28 @@ export interface UserInvitationWithDetails extends UserInvitation {
   role?: UserRole
   invited_by_email?: string
 }
+
+// Crawler discovery types
+export interface DiscoveredProduct {
+  id: number
+  crawl_run_id: number | null
+  url: string
+  url_canonical: string
+  domain: string
+  page_title: string | null
+  detected_price: number | null
+  status: 'pending' | 'reviewed' | 'ignored' | 'added'
+  reviewed_at: string | null
+  reviewed_by: string | null
+  created_at: string
+}
+
+export interface CrawlerOffer {
+  id: number
+  domain_id: number
+  title: string
+  offer_url: string
+  summary: string | null
+  created_at: string
+  domain?: { name: string }
+}

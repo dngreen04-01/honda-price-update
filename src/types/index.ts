@@ -57,6 +57,17 @@ export interface ShopifyCatalogCache {
   last_synced_at: string;
   created_at: string;
   updated_at: string;
+  // Added via migrations - optional for backwards compatibility
+  product_title?: string;
+  variant_title?: string;
+  variant_sku?: string;
+  scraped_sale_price?: number;
+  scraped_original_price?: number;
+  scrape_confidence?: number;
+  last_scraped_at?: string;
+  product_status?: 'active' | 'inactive' | 'discontinued';
+  discontinued_at?: string;
+  discontinued_reason?: string;
 }
 
 // Scraper Types
@@ -188,6 +199,9 @@ export interface Config {
     templateId: string;
     recipients: string[];
   };
+  gemini: {
+    apiKey: string;
+  };
   app: {
     timezone: string;
     logLevel: string;
@@ -204,3 +218,75 @@ export interface Logger {
   warn(message: string, meta?: Record<string, unknown>): void;
   error(message: string, meta?: Record<string, unknown>): void;
 }
+
+// Bike Product Scraping Types (hondamotorbikes.co.nz)
+export interface BikeFeature {
+  title: string | null;
+  description: string | null;
+  image: string | null;
+}
+
+export interface BikeSpecification {
+  label: string;
+  value: string;
+}
+
+export interface BikeSpecificationCategory {
+  category: string;
+  specs: BikeSpecification[];
+}
+
+export interface BikeProductAssets {
+  url: string;
+  scrapedAt: string;
+
+  images: {
+    hero: string | null;
+    product: string | null;
+    features: (string | null)[];
+  };
+
+  content: {
+    title: string | null;
+    description: string | null;
+    features: BikeFeature[];
+  };
+
+  specifications: BikeSpecificationCategory[];
+}
+
+// Push to Shopify Types
+export interface CreateProductInput {
+  title: string;
+  descriptionHtml: string;
+  vendor: string;
+  status: 'DRAFT' | 'ACTIVE';
+  templateSuffix?: string; // Theme template suffix (e.g., 'motorbikes')
+  variants: CreateVariantInput[];
+  metafields: CreateMetafieldInput[];
+}
+
+export interface CreateVariantInput {
+  sku: string;
+  price: string;
+  inventoryPolicy: 'DENY' | 'CONTINUE';
+  imageSrc?: string;
+}
+
+export interface CreateMetafieldInput {
+  namespace: string;
+  key: string;
+  value: string;
+  type: 'single_line_text_field' | 'multi_line_text_field' | 'url' | 'file_reference';
+}
+
+export interface PushToShopifyResult {
+  success: boolean;
+  shopifyProductId?: string;
+  shopifyVariantId?: string;
+  shopifyProductUrl?: string;
+  error?: string;
+  warnings?: string[];
+}
+
+export type ProductTemplate = 'motorbikes' | 'outboard-motors' | 'default';

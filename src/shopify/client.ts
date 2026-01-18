@@ -2,7 +2,7 @@ import { shopifyApi, LATEST_API_VERSION, Session } from '@shopify/shopify-api';
 import '@shopify/shopify-api/adapters/node';
 import { config } from '../utils/config.js';
 import { logger } from '../utils/logger.js';
-import { ShopifyProduct, ShopifyPriceUpdate } from '../types/index.js';
+import { ShopifyProduct, ShopifyPriceUpdate, CreateProductInput, CreateMetafieldInput } from '../types/index.js';
 import { canonicalizeUrl } from '../utils/canonicalize.js';
 
 /**
@@ -445,6 +445,388 @@ export class ShopifyClient {
         error: error instanceof Error ? error.message : String(error),
       });
       throw error;
+    }
+  }
+
+  /**
+   * Upload a file to Shopify via staged uploads
+   * @param sourceUrl - URL of the file to upload
+   * @param filename - Name for the file in Shopify
+   * @param contentType - MIME type (e.g., 'image/jpeg')
+   * @returns Shopify file GID for use in metafields
+   */
+  async uploadFile(sourceUrl: string, filename: string, contentType: string): Promise<string | null> {
+    const stagedUploadMutation = `
+      mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+        stagedUploadsCreate(input: $input) {
+          stagedTargets {
+            url
+            resourceUrl
+            parameters {
+              name
+              value
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const fileCreateMutation = `
+      mutation fileCreate($files: [FileCreateInput!]!) {
+        fileCreate(files: $files) {
+          files {
+            id
+            alt
+            ... on MediaImage {
+              id
+              image {
+                url
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      // Step 1: Create staged upload target
+      const stagedResponse = await client.request(stagedUploadMutation, {
+        variables: {
+          input: [{
+            filename,
+            mimeType: contentType,
+            resource: 'FILE',
+            httpMethod: 'POST',
+          }],
+        },
+      });
+
+      const stagedBody = stagedResponse.data as {
+        stagedUploadsCreate?: {
+          stagedTargets: Array<{
+            url: string;
+            resourceUrl: string;
+            parameters: Array<{ name: string; value: string }>;
+          }>;
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const stagedErrors = stagedBody.stagedUploadsCreate?.userErrors;
+      if (stagedErrors && stagedErrors.length > 0) {
+        logger.error('Staged upload creation failed', { errors: stagedErrors });
+        return null;
+      }
+
+      const target = stagedBody.stagedUploadsCreate?.stagedTargets?.[0];
+      if (!target) {
+        logger.error('No staged upload target returned');
+        return null;
+      }
+
+      // Step 2: Fetch the image from source URL
+      const imageResponse = await fetch(sourceUrl);
+      if (!imageResponse.ok) {
+        logger.error('Failed to fetch image from source', { sourceUrl, status: imageResponse.status });
+        return null;
+      }
+      const imageBuffer = await imageResponse.arrayBuffer();
+
+      // Step 3: Upload to Shopify's staged target
+      const formData = new FormData();
+      for (const param of target.parameters) {
+        formData.append(param.name, param.value);
+      }
+      formData.append('file', new Blob([imageBuffer], { type: contentType }), filename);
+
+      const uploadResponse = await fetch(target.url, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        logger.error('Failed to upload to staged target', { status: uploadResponse.status });
+        return null;
+      }
+
+      // Step 4: Create file from staged upload
+      const fileResponse = await client.request(fileCreateMutation, {
+        variables: {
+          files: [{
+            alt: filename,
+            contentType: 'IMAGE',
+            originalSource: target.resourceUrl,
+          }],
+        },
+      });
+
+      const fileBody = fileResponse.data as {
+        fileCreate?: {
+          files: Array<{ id: string }>;
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const fileErrors = fileBody.fileCreate?.userErrors;
+      if (fileErrors && fileErrors.length > 0) {
+        logger.error('File creation failed', { errors: fileErrors });
+        return null;
+      }
+
+      const fileId = fileBody.fileCreate?.files?.[0]?.id;
+      if (!fileId) {
+        logger.error('No file ID returned');
+        return null;
+      }
+
+      logger.info('File uploaded to Shopify', { filename, fileId });
+      return fileId;
+    } catch (error) {
+      logger.error('Failed to upload file to Shopify', {
+        sourceUrl,
+        filename,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Create a new product in Shopify
+   * Uses the new productCreate API with ProductCreateInput (not deprecated ProductInput)
+   * A default variant is created automatically, then we update it with price/SKU
+   */
+  async createProduct(input: CreateProductInput): Promise<{
+    productId: string;
+    variantId: string;
+  } | null> {
+    // Step 1: Create product with ProductCreateInput (default variant created automatically)
+    const createMutation = `
+      mutation productCreate($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
+        productCreate(product: $product, media: $media) {
+          product {
+            id
+            title
+            handle
+            variants(first: 1) {
+              nodes {
+                id
+                inventoryItem {
+                  id
+                }
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    // Step 2: Update the default variant with price and inventoryPolicy
+    const updateVariantMutation = `
+      mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+        productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+          productVariants {
+            id
+            sku
+            price
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    // Step 3: Update inventory item to set SKU
+    const updateInventoryItemMutation = `
+      mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+        inventoryItemUpdate(id: $id, input: $input) {
+          inventoryItem {
+            id
+            sku
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      // Build metafields array for GraphQL
+      const metafields = input.metafields.map((mf: CreateMetafieldInput) => ({
+        namespace: mf.namespace,
+        key: mf.key,
+        value: mf.value,
+        type: mf.type,
+      }));
+
+      // Get variant data for later update
+      const variant = input.variants[0];
+
+      // Build media array if variant has image
+      const media = variant?.imageSrc ? [{
+        originalSource: variant.imageSrc,
+        mediaContentType: 'IMAGE',
+      }] : [];
+
+      // Step 1: Create the product (default variant created automatically)
+      const createResponse = await client.request(createMutation, {
+        variables: {
+          product: {
+            title: input.title,
+            descriptionHtml: input.descriptionHtml,
+            vendor: input.vendor,
+            status: input.status,
+            category: 'gid://shopify/TaxonomyCategory/vp-2-2-3', // Motorbikes category
+            templateSuffix: input.templateSuffix || 'motorbikes', // Theme template
+            metafields,
+          },
+          media: media.length > 0 ? media : undefined,
+        },
+      });
+
+      const createBody = createResponse.data as {
+        productCreate?: {
+          product?: {
+            id: string;
+            title: string;
+            handle: string;
+            variants: {
+              nodes: Array<{
+                id: string;
+                inventoryItem: {
+                  id: string;
+                };
+              }>;
+            };
+          };
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const createErrors = createBody.productCreate?.userErrors;
+      if (createErrors && createErrors.length > 0) {
+        logger.error('Product creation failed', { errors: createErrors });
+        return null;
+      }
+
+      const product = createBody.productCreate?.product;
+      if (!product) {
+        logger.error('No product returned from creation');
+        return null;
+      }
+
+      const variantNode = product.variants.nodes[0];
+      const variantId = variantNode?.id;
+      const inventoryItemId = variantNode?.inventoryItem?.id;
+
+      if (!variantId) {
+        logger.error('No variant ID returned from creation');
+        return null;
+      }
+
+      logger.info('Product created in Shopify, updating variant...', {
+        productId: product.id,
+        variantId,
+        inventoryItemId,
+        title: product.title,
+      });
+
+      // Step 2: Update the default variant with price and inventoryPolicy
+      if (variant) {
+        const updateResponse = await client.request(updateVariantMutation, {
+          variables: {
+            productId: product.id,
+            variants: [{
+              id: variantId,
+              price: variant.price,
+              inventoryPolicy: variant.inventoryPolicy,
+            }],
+          },
+        });
+
+        const updateBody = updateResponse.data as {
+          productVariantsBulkUpdate?: {
+            productVariants: Array<{ id: string; sku: string; price: string }>;
+            userErrors: Array<{ field: string[]; message: string }>;
+          };
+        };
+
+        const updateErrors = updateBody.productVariantsBulkUpdate?.userErrors;
+        if (updateErrors && updateErrors.length > 0) {
+          logger.warn('Variant update had errors (product was still created)', { errors: updateErrors });
+        } else {
+          logger.info('Variant price/policy updated successfully', {
+            price: variant.price,
+          });
+        }
+
+        // Step 3: Update inventory item to set SKU
+        if (inventoryItemId && variant.sku) {
+          const skuResponse = await client.request(updateInventoryItemMutation, {
+            variables: {
+              id: inventoryItemId,
+              input: {
+                sku: variant.sku,
+              },
+            },
+          });
+
+          const skuBody = skuResponse.data as {
+            inventoryItemUpdate?: {
+              inventoryItem?: { id: string; sku: string };
+              userErrors: Array<{ field: string[]; message: string }>;
+            };
+          };
+
+          const skuErrors = skuBody.inventoryItemUpdate?.userErrors;
+          if (skuErrors && skuErrors.length > 0) {
+            logger.warn('SKU update had errors', { errors: skuErrors });
+          } else {
+            logger.info('SKU updated successfully', {
+              sku: variant.sku,
+              inventoryItemId,
+            });
+          }
+        }
+      }
+
+      logger.info('Product created in Shopify', {
+        productId: product.id,
+        variantId,
+        title: product.title,
+        handle: product.handle,
+      });
+
+      return {
+        productId: product.id,
+        variantId,
+      };
+    } catch (error) {
+      logger.error('Failed to create product in Shopify', {
+        title: input.title,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
     }
   }
 }

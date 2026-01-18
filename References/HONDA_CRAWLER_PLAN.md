@@ -48,6 +48,13 @@ A user can see this working by triggering a manual crawl via `POST /api/crawl`, 
   Evidence: `src/api/crawler-api.ts` created with endpoints for crawl management and the `runCrawlAsync` function processes both products and offers.
   Date: 2026-01-15
 
+- Observation: Product URLs can have category prefixes that create duplicate entries in the discovery queue.
+  Evidence: `/honda-genuine-accessories/08l78mkse00` and `/08l78mkse00` are the same product but were treated as different due to exact URL matching.
+  Solution: Implemented multi-level matching in `new-product-detector.ts`:
+    - Tier 1: Exact canonical URL match (existing)
+    - Tier 2: Product ID / SKU match using last path segment against `variant_sku` and extracted product IDs from existing URLs
+  Date: 2026-01-17
+
 ## Decision Log
 
 - Decision: Use hybrid Scrapling + TypeScript orchestrator instead of Scrapy or Crawlee

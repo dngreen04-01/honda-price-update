@@ -34,6 +34,9 @@ export const config: Config = {
     templateId: getEnvVar('SENDGRID_DIGEST_TEMPLATE_ID'),
     recipients: getEnvVar('SENDGRID_RECIPIENT_EMAILS').split(',').map(e => e.trim()),
   },
+  gemini: {
+    apiKey: getEnvVar('GEMINI_API_KEY', false) || '',
+  },
   app: {
     timezone: getEnvVar('TIMEZONE', false) || 'Pacific/Auckland',
     logLevel: getEnvVar('LOG_LEVEL', false) || 'info',

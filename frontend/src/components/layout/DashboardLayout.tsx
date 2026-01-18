@@ -10,7 +10,8 @@ import {
   AlertCircle,
   LogOut,
   Users,
-  ShieldCheck
+  ShieldCheck,
+  Radar
 } from 'lucide-react'
 import { Button } from '../ui/Button'
 
@@ -21,6 +22,7 @@ const navigation = [
   { name: 'Price Comparison', href: '/dashboard/price-comparison', icon: DollarSign },
   { name: 'Shopify Updates', href: '/dashboard/shopify', icon: ShoppingCart },
   { name: 'Actions Required', href: '/dashboard/actions', icon: AlertCircle },
+  { name: 'Discoveries', href: '/dashboard/discoveries', icon: Radar },
 ]
 
 const adminNavigation = [

@@ -4,7 +4,7 @@
  */
 
 import { Request, Response } from 'express';
-import { crawlerOrchestrator } from '../crawler/crawler-orchestrator.js';
+import { crawlerOrchestrator, DiscoveredUrl, BatchStats } from '../crawler/crawler-orchestrator.js';
 import { NewProductDetector } from '../crawler/new-product-detector.js';
 import { OfferDetector, DiscoveredOffer } from '../crawler/offer-detector.js';
 import * as queries from '../database/queries.js';
@@ -55,72 +55,128 @@ export async function handleStartCrawl(req: Request, res: Response): Promise<voi
 }
 
 /**
- * Run crawl asynchronously and update database with results
+ * Run crawl asynchronously with incremental batch saves
+ * Saves discoveries every 50 items or 10 minutes to prevent data loss
  */
 async function runCrawlAsync(
   runId: number,
   options?: { sites?: string[]; maxPagesPerSite?: number }
 ): Promise<void> {
-  try {
-    // Execute the crawl
-    const result = await crawlerOrchestrator.crawl(options);
+  // Track totals for products and offers saved across all batches
+  let totalProductsSaved = 0;
+  let totalOffersSaved = 0;
 
+  // Initialize detectors once (they cache existing URLs)
+  const productDetector = new NewProductDetector();
+  const offerDetector = new OfferDetector();
+
+  /**
+   * Batch save callback - called every 50 discoveries or 10 minutes
+   * Saves discoveries incrementally to database and updates crawl_run progress
+   */
+  const handleBatchSave = async (discoveries: DiscoveredUrl[], stats: BatchStats): Promise<void> => {
     // Separate products and offers
-    const productDiscoveries = result.discoveries.filter((d) => !d.isOffer);
-    const offerDiscoveries = result.discoveries.filter((d) => d.isOffer);
+    const productDiscoveries = discoveries.filter((d) => !d.isOffer);
+    const offerDiscoveries = discoveries.filter((d) => d.isOffer);
 
-    // Detect new products (not already in Shopify catalog)
-    const productDetector = new NewProductDetector();
-    const detectionResult = await productDetector.detectNewProducts(productDiscoveries);
-    const newProducts = detectionResult.newProducts;
+    // Save products
+    if (productDiscoveries.length > 0) {
+      const detectionResult = await productDetector.detectNewProducts(productDiscoveries);
+      for (const product of detectionResult.newProducts) {
+        await queries.insertDiscoveredProduct(runId, product);
+      }
+      totalProductsSaved += detectionResult.newProducts.length;
 
-    // Save new products to discovered_products table
-    for (const product of newProducts) {
-      await queries.insertDiscoveredProduct(runId, product);
+      logger.info('Batch: saved products', {
+        runId,
+        batchProducts: detectionResult.newProducts.length,
+        totalProductsSaved,
+      });
     }
 
-    // Process and save discovered offers
-    const offerDetector = new OfferDetector();
-    const offersToSave: DiscoveredOffer[] = offerDiscoveries.map((d) => ({
-      url: d.url,
-      urlCanonical: d.urlCanonical,
-      domain: d.domain,
-      title: d.offerTitle || d.pageTitle || 'Untitled Offer',
-      summary: d.offerSummary,
-      startDate: d.offerStartDate,
-      endDate: d.offerEndDate,
-    }));
+    // Save offers
+    if (offerDiscoveries.length > 0) {
+      const offersToSave: DiscoveredOffer[] = offerDiscoveries.map((d) => ({
+        url: d.url,
+        urlCanonical: d.urlCanonical,
+        domain: d.domain,
+        title: d.offerTitle || d.pageTitle || 'Untitled Offer',
+        summary: d.offerSummary,
+        startDate: d.offerStartDate,
+        endDate: d.offerEndDate,
+      }));
 
-    const offerResult = await offerDetector.processOffers(offersToSave);
+      const offerResult = await offerDetector.processOffers(offersToSave);
+      totalOffersSaved += offerResult.savedCount;
 
-    // Update crawl run with results
+      logger.info('Batch: saved offers', {
+        runId,
+        batchOffers: offerResult.savedCount,
+        totalOffersSaved,
+      });
+    }
+
+    // Update crawl_run with progress (partial results)
+    await queries.updateCrawlRun(runId, {
+      urls_discovered: stats.totalVisited,
+      new_products_found: totalProductsSaved,
+      new_offers_found: totalOffersSaved,
+    });
+
+    logger.info('Batch save progress updated', {
+      runId,
+      urlsVisited: stats.totalVisited,
+      totalProductsSaved,
+      totalOffersSaved,
+    });
+  };
+
+  try {
+    // Execute the crawl with incremental batch saves
+    const result = await crawlerOrchestrator.crawl({
+      ...options,
+      onBatchReady: handleBatchSave,
+      batchSize: 50,           // Save every 50 discoveries
+      batchIntervalMs: 600000, // Or every 10 minutes
+    });
+
+    // Flush any remaining unsaved discoveries
+    await crawlerOrchestrator.flushRemainingDiscoveries();
+
+    // Final update - mark as completed
     await queries.updateCrawlRun(runId, {
       status: 'completed',
       completed_at: new Date().toISOString(),
       urls_discovered: result.urlsDiscovered,
-      new_products_found: newProducts.length,
-      new_offers_found: offerResult.savedCount,
+      new_products_found: totalProductsSaved,
+      new_offers_found: totalOffersSaved,
     });
 
     logger.info('Crawl completed successfully', {
       runId,
       urlsDiscovered: result.urlsDiscovered,
-      newProductsFound: newProducts.length,
-      newOffersFound: offerResult.savedCount,
+      newProductsFound: totalProductsSaved,
+      newOffersFound: totalOffersSaved,
       durationMinutes: Math.round(result.durationMs / 60000),
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    // Update crawl run with error
+    // Update crawl run with error - but keep any products/offers already saved!
     await queries.updateCrawlRun(runId, {
       status: 'failed',
       error_message: errorMessage,
+      // Preserve the products/offers saved before failure
+      new_products_found: totalProductsSaved,
+      new_offers_found: totalOffersSaved,
     });
 
     logger.error('Crawl failed', {
       runId,
       error: errorMessage,
+      // Important: log what was saved before failure
+      productsSavedBeforeFailure: totalProductsSaved,
+      offersSavedBeforeFailure: totalOffersSaved,
     });
   }
 }
@@ -244,10 +300,10 @@ export async function handleReviewProduct(req: Request, res: Response): Promise<
 
     const { status, reviewedBy } = req.body;
 
-    if (!['reviewed', 'ignored', 'added'].includes(status)) {
+    if (!['pending', 'reviewed', 'ignored', 'added'].includes(status)) {
       res.status(400).json({
         success: false,
-        message: 'Invalid status. Must be one of: reviewed, ignored, added',
+        message: 'Invalid status. Must be one of: pending, reviewed, ignored, added',
       });
       return;
     }
@@ -313,6 +369,94 @@ export async function handleGetCrawlStats(_req: Request, res: Response): Promise
     res.status(500).json({
       success: false,
       message: 'Failed to get crawl stats',
+    });
+  }
+}
+
+/**
+ * GET /api/crawl/duplicates
+ * Find duplicate discoveries that share the same product ID
+ */
+export async function handleFindDuplicates(_req: Request, res: Response): Promise<void> {
+  try {
+    const duplicates = await queries.findDuplicateDiscoveries();
+
+    res.json({
+      success: true,
+      duplicateCount: duplicates.length,
+      duplicates,
+    });
+  } catch (error) {
+    logger.error('Failed to find duplicate discoveries', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to find duplicate discoveries',
+    });
+  }
+}
+
+/**
+ * DELETE /api/crawl/duplicates
+ * Remove duplicate discoveries, keeping the one with shortest URL for each product ID
+ */
+export async function handleCleanupDuplicates(req: Request, res: Response): Promise<void> {
+  try {
+    // Check for dry run mode
+    const dryRun = req.query.dryRun === 'true';
+
+    // Find all duplicates
+    const duplicates = await queries.findDuplicateDiscoveries();
+
+    if (duplicates.length === 0) {
+      res.json({
+        success: true,
+        message: 'No duplicates found',
+        duplicatesFound: 0,
+        deletedCount: 0,
+      });
+      return;
+    }
+
+    if (dryRun) {
+      // Just return what would be deleted
+      res.json({
+        success: true,
+        dryRun: true,
+        duplicatesFound: duplicates.length,
+        message: `Would delete ${duplicates.length} duplicate discoveries`,
+        duplicates: duplicates.map((d) => ({
+          id: d.id,
+          productId: d.product_id,
+          url: d.url,
+        })),
+      });
+      return;
+    }
+
+    // Delete all duplicates
+    const idsToDelete = duplicates.map((d) => d.id);
+    const deletedCount = await queries.deleteDiscoveredProductsByIds(idsToDelete);
+
+    logger.info('Cleaned up duplicate discoveries', {
+      duplicatesFound: duplicates.length,
+      deletedCount,
+    });
+
+    res.json({
+      success: true,
+      duplicatesFound: duplicates.length,
+      deletedCount,
+      message: `Deleted ${deletedCount} duplicate discoveries`,
+    });
+  } catch (error) {
+    logger.error('Failed to cleanup duplicate discoveries', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to cleanup duplicate discoveries',
     });
   }
 }

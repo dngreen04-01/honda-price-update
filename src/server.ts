@@ -24,8 +24,16 @@ import {
   handleReviewProduct,
   handleGetCrawlRuns,
   handleGetCrawlStats,
+  handleFindDuplicates,
+  handleCleanupDuplicates,
 } from './api/crawler-api.js';
+import { handleScrapeBike } from './api/bike-scraper-api.js';
+import { handlePushToShopify, handlePushUrlToShopify } from './api/shopify-push-api.js';
 import { scheduleWeeklyCrawl, weeklyCrawlerJob } from './scheduler/weekly-crawler-job.js';
+import {
+  handleStartSupplierRescrape,
+  handleGetSupplierRescrapeStatus,
+} from './api/supplier-rescrape-api.js';
 
 const app = express();
 const PORT = process.env.API_PORT || 3000;
@@ -142,6 +150,39 @@ app.get('/api/crawl/stats', handleGetCrawlStats);
 
 // Review a discovered product
 app.post('/api/crawl/review/:productId', handleReviewProduct);
+
+// Find duplicate discoveries
+app.get('/api/crawl/duplicates', handleFindDuplicates);
+
+// Cleanup duplicate discoveries (use ?dryRun=true to preview)
+app.delete('/api/crawl/duplicates', handleCleanupDuplicates);
+
+// ============================================
+// Supplier Re-scrape Endpoints
+// ============================================
+
+// Start a batch re-scrape for all products from a specific supplier
+app.post('/api/supplier-rescrape', handleStartSupplierRescrape);
+
+// Get status of a supplier re-scrape job
+app.get('/api/supplier-rescrape/:jobId', handleGetSupplierRescrapeStatus);
+
+// ============================================
+// Bike Product Scraper Endpoint
+// ============================================
+
+// Scrape bike product assets from hondamotorbikes.co.nz
+app.post('/api/scrape-bike', handleScrapeBike);
+
+// ============================================
+// Shopify Push Endpoint
+// ============================================
+
+// Push discovered product to Shopify
+app.post('/api/shopify/push-product', handlePushToShopify);
+
+// Push product to Shopify directly from URL (manual entry)
+app.post('/api/shopify/push-url', handlePushUrlToShopify);
 
 // Start server
 app.listen(PORT, () => {
