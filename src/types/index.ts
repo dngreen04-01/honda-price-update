@@ -201,11 +201,16 @@ export interface Config {
   };
   gemini: {
     apiKey: string;
+    textModel: string;
+    imageModel: string;
   };
   app: {
     timezone: string;
     logLevel: string;
     superuserEmail: string;
+  };
+  offers: {
+    landingPageHandle: string;
   };
 }
 
@@ -290,3 +295,65 @@ export interface PushToShopifyResult {
 }
 
 export type ProductTemplate = 'motorbikes' | 'outboard-motors' | 'default';
+
+// Offer Page Management Types
+export type OfferPageStatus = 'active' | 'hidden' | 'deleted';
+
+export interface ShopifyOfferPage {
+  id: number;
+  offer_id: number;
+  shopify_page_id: string;
+  shopify_page_handle: string;
+  hero_image_shopify_url: string | null;
+  status: OfferPageStatus;
+  landing_tile_html: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OfferProductLink {
+  id: number;
+  offer_id: number;
+  product_id: number;
+  created_at: string;
+}
+
+export interface OfferWithProducts extends Offer {
+  shopifyOfferPage?: ShopifyOfferPage | null;
+  linkedProducts?: ShopifyCatalogCache[];
+}
+
+// Scraped Offer Content (from supplier pages)
+export interface ScrapedOfferContent {
+  heroImageUrl: string | null;
+  title: string;
+  bodyHtml: string;
+  termsText: string | null;
+  endDate: Date | null;
+  startDate: Date | null;
+  productUrls: string[];
+  sourceUrl: string;
+}
+
+// Shopify Page Types
+export interface ShopifyPage {
+  id: string;
+  title: string;
+  handle: string;
+  bodyHtml: string;
+  isPublished: boolean;
+}
+
+// Offer Push Workflow Types
+export interface PushOfferResult {
+  success: boolean;
+  shopifyPageId?: string;
+  shopifyPageUrl?: string;
+  message?: string;
+  warnings?: string[];
+}
+
+export interface ExpireResult {
+  expiredCount: number;
+  errors: string[];
+}

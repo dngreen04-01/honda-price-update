@@ -36,10 +36,15 @@ export const config: Config = {
   },
   gemini: {
     apiKey: getEnvVar('GEMINI_API_KEY', false) || '',
+    textModel: getEnvVar('GEMINI_TEXT_MODEL', false) || 'gemini-3-flash-preview',
+    imageModel: getEnvVar('GEMINI_IMAGE_MODEL', false) || 'gemini-3-pro-image-preview',
   },
   app: {
     timezone: getEnvVar('TIMEZONE', false) || 'Pacific/Auckland',
     logLevel: getEnvVar('LOG_LEVEL', false) || 'info',
     superuserEmail: getEnvVar('SUPERUSER_EMAIL', false) || '',
+  },
+  offers: {
+    landingPageHandle: getEnvVar('OFFERS_LANDING_PAGE_HANDLE', false) || 'offers',
   },
 };

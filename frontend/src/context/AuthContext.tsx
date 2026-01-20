@@ -60,13 +60,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return null
       }
 
+      if (!profileData) {
+        return null
+      }
+
+      // Cast to UserProfile to access properties
+      const typedProfile = profileData as unknown as UserProfile
+
       // Fetch role separately if profile has role_id
       let role: UserRole | undefined
-      if (profileData?.role_id) {
+      if (typedProfile.role_id) {
         const { data: roleData, error: roleError } = await supabase
           .from('user_roles')
           .select('id, name, description')
-          .eq('id', profileData.role_id)
+          .eq('id', typedProfile.role_id)
           .single()
 
         if (roleError) {
@@ -76,7 +83,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
 
-      return { ...profileData, role } as UserProfileWithRole
+      return { ...typedProfile, role } as UserProfileWithRole
     } catch (error) {
       console.error('[Auth] Exception loading profile:', error)
       return null
@@ -142,6 +149,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, newSession) => {
       if (!mounted) return
+
+      // Handle PASSWORD_RECOVERY event - redirect to reset password page
+      if (event === 'PASSWORD_RECOVERY') {
+        window.location.href = '/reset-password'
+        return
+      }
 
       setSession(newSession)
       setUser(newSession?.user ?? null)

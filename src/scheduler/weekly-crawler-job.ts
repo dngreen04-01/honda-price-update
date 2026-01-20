@@ -24,6 +24,7 @@ import {
   createCrawlRun,
   updateCrawlRun,
   insertDiscoveredProduct,
+  cleanupStaleCrawlRuns,
 } from '../database/queries.js';
 import { logger } from '../utils/logger.js';
 
@@ -71,10 +72,23 @@ export class WeeklyCrawlerJob {
   /**
    * Start the weekly crawler schedule
    */
-  start(): void {
+  async start(): Promise<void> {
     if (this.task) {
       logger.warn('Weekly crawler job is already scheduled');
       return;
+    }
+
+    // Clean up any stale "running" crawl runs from crashed processes
+    try {
+      const cleanedUp = await cleanupStaleCrawlRuns(24);
+      if (cleanedUp > 0) {
+        logger.info('Cleaned up stale crawl runs on startup', { count: cleanedUp });
+      }
+    } catch (error) {
+      logger.error('Failed to cleanup stale crawl runs on startup', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Continue with scheduling even if cleanup fails
     }
 
     // Validate cron expression
@@ -317,8 +331,8 @@ export const weeklyCrawlerJob = new WeeklyCrawlerJob();
  * Convenience function to schedule the weekly crawl
  * Can be called from application startup
  */
-export function scheduleWeeklyCrawl(): void {
-  weeklyCrawlerJob.start();
+export async function scheduleWeeklyCrawl(): Promise<void> {
+  await weeklyCrawlerJob.start();
 }
 
 /**

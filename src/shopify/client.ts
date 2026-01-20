@@ -829,6 +829,491 @@ export class ShopifyClient {
       return null;
     }
   }
+
+  // ==========================================================================
+  // Page Management Methods (for Offer Pages)
+  // ==========================================================================
+
+  /**
+   * Create a new page in Shopify
+   * @param input - Page creation parameters
+   * @returns The created page ID and handle, or null on failure
+   */
+  async createPage(input: {
+    title: string;
+    bodyHtml: string;
+    handle?: string;
+    templateSuffix?: string;
+    isPublished?: boolean;
+  }): Promise<{ pageId: string; handle: string } | null> {
+    const mutation = `
+      mutation pageCreate($page: PageCreateInput!) {
+        pageCreate(page: $page) {
+          page {
+            id
+            title
+            handle
+            body
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      const response = await client.request(mutation, {
+        variables: {
+          page: {
+            title: input.title,
+            body: input.bodyHtml,
+            handle: input.handle,
+            templateSuffix: input.templateSuffix,
+            isPublished: input.isPublished ?? true,
+          },
+        },
+      });
+
+      const body = response.data as {
+        pageCreate?: {
+          page?: {
+            id: string;
+            title: string;
+            handle: string;
+          };
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const userErrors = body.pageCreate?.userErrors;
+      if (userErrors && userErrors.length > 0) {
+        logger.error('Page creation failed', { errors: userErrors, title: input.title });
+        return null;
+      }
+
+      const page = body.pageCreate?.page;
+      if (!page) {
+        logger.error('No page returned from creation', { title: input.title });
+        return null;
+      }
+
+      logger.info('Page created in Shopify', {
+        pageId: page.id,
+        handle: page.handle,
+        title: page.title,
+      });
+
+      return {
+        pageId: page.id,
+        handle: page.handle,
+      };
+    } catch (error) {
+      logger.error('Failed to create page in Shopify', {
+        title: input.title,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Update an existing page in Shopify
+   * @param id - The page GID (e.g., "gid://shopify/Page/123")
+   * @param input - Fields to update
+   * @returns Whether the update was successful
+   */
+  async updatePage(
+    id: string,
+    input: {
+      title?: string;
+      bodyHtml?: string;
+      handle?: string;
+      isPublished?: boolean;
+    }
+  ): Promise<boolean> {
+    const mutation = `
+      mutation pageUpdate($id: ID!, $page: PageUpdateInput!) {
+        pageUpdate(id: $id, page: $page) {
+          page {
+            id
+            title
+            handle
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      // Build the update input, only including fields that are provided
+      const pageInput: Record<string, unknown> = {};
+      if (input.title !== undefined) pageInput.title = input.title;
+      if (input.bodyHtml !== undefined) pageInput.body = input.bodyHtml;
+      if (input.handle !== undefined) pageInput.handle = input.handle;
+      if (input.isPublished !== undefined) pageInput.isPublished = input.isPublished;
+
+      const response = await client.request(mutation, {
+        variables: {
+          id,
+          page: pageInput,
+        },
+      });
+
+      const body = response.data as {
+        pageUpdate?: {
+          page?: {
+            id: string;
+            title: string;
+            handle: string;
+          };
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const userErrors = body.pageUpdate?.userErrors;
+      if (userErrors && userErrors.length > 0) {
+        logger.error('Page update failed', { errors: userErrors, pageId: id });
+        return false;
+      }
+
+      logger.info('Page updated in Shopify', {
+        pageId: id,
+        updated: Object.keys(pageInput),
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('Failed to update page in Shopify', {
+        pageId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Delete a page from Shopify
+   * @param id - The page GID
+   * @returns Whether the deletion was successful
+   */
+  async deletePage(id: string): Promise<boolean> {
+    const mutation = `
+      mutation pageDelete($id: ID!) {
+        pageDelete(id: $id) {
+          deletedPageId
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      const response = await client.request(mutation, {
+        variables: { id },
+      });
+
+      const body = response.data as {
+        pageDelete?: {
+          deletedPageId?: string;
+          userErrors: Array<{ field: string[]; message: string }>;
+        };
+      };
+
+      const userErrors = body.pageDelete?.userErrors;
+      if (userErrors && userErrors.length > 0) {
+        logger.error('Page deletion failed', { errors: userErrors, pageId: id });
+        return false;
+      }
+
+      logger.info('Page deleted from Shopify', { pageId: id });
+      return true;
+    } catch (error) {
+      logger.error('Failed to delete page from Shopify', {
+        pageId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Get a page by its handle
+   * @param handle - The URL handle (slug)
+   * @returns The page or null if not found
+   */
+  async getPageByHandle(handle: string): Promise<{
+    id: string;
+    title: string;
+    handle: string;
+    bodyHtml: string;
+    isPublished: boolean;
+  } | null> {
+    // Use pages query with handle filter since pageByHandle doesn't exist in Shopify's GraphQL API
+    const query = `
+      query getPageByHandle($query: String!) {
+        pages(first: 1, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+              body
+              isPublished
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      const response = await client.request(query, {
+        variables: { query: `handle:${handle}` },
+      });
+
+      const body = response.data as {
+        pages?: {
+          edges: Array<{
+            node: {
+              id: string;
+              title: string;
+              handle: string;
+              body: string;
+              isPublished: boolean;
+            };
+          }>;
+        };
+      };
+
+      const pages = body.pages?.edges || [];
+      if (pages.length === 0) {
+        logger.debug('No page found with handle', { handle });
+        return null;
+      }
+
+      const page = pages[0].node;
+      return {
+        id: page.id,
+        title: page.title,
+        handle: page.handle,
+        bodyHtml: page.body,
+        isPublished: page.isPublished,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch page by handle', {
+        handle,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Search for pages by title
+   * @param title - The title to search for
+   * @returns Array of matching pages or empty array
+   */
+  async searchPagesByTitle(title: string): Promise<Array<{
+    id: string;
+    title: string;
+    handle: string;
+  }>> {
+    const query = `
+      query searchPages($query: String!) {
+        pages(first: 10, query: $query) {
+          edges {
+            node {
+              id
+              title
+              handle
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      const response = await client.request(query, {
+        variables: { query: `title:${title}` },
+      });
+
+      const body = response.data as {
+        pages?: {
+          edges: Array<{
+            node: {
+              id: string;
+              title: string;
+              handle: string;
+            };
+          }>;
+        };
+      };
+
+      const pages = body.pages?.edges || [];
+      return pages.map(edge => ({
+        id: edge.node.id,
+        title: edge.node.title,
+        handle: edge.node.handle,
+      }));
+    } catch (error) {
+      logger.error('Failed to search pages by title', {
+        title,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Get the featured image URL for a Shopify product
+   * @param productId - The product GID (e.g., "gid://shopify/Product/123")
+   * @returns The featured image URL or null if not found
+   */
+  async getProductImage(productId: string): Promise<string | null> {
+    const details = await this.getProductDetails(productId);
+    return details?.imageUrl || null;
+  }
+
+  /**
+   * Get product details including image URL and handle for linking
+   * @param productId - The product GID (e.g., "gid://shopify/Product/123")
+   * @returns Object with imageUrl and handle, or null if not found
+   */
+  async getProductDetails(productId: string): Promise<{ imageUrl: string | null; handle: string | null } | null> {
+    const query = `
+      query getProductDetails($id: ID!) {
+        product(id: $id) {
+          id
+          handle
+          featuredImage {
+            url
+            altText
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      const response = await client.request(query, {
+        variables: { id: productId },
+      });
+
+      const body = response.data as {
+        product?: {
+          id: string;
+          handle: string;
+          featuredImage?: {
+            url: string;
+            altText: string | null;
+          };
+        };
+      };
+
+      if (!body.product) {
+        logger.debug('No product found', { productId });
+        return null;
+      }
+
+      return {
+        imageUrl: body.product.featuredImage?.url || null,
+        handle: body.product.handle || null,
+      };
+    } catch (error) {
+      logger.error('Failed to fetch product details', {
+        productId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get file URL after upload (polls until file is ready)
+   * @param fileId - The Shopify file GID
+   * @param maxAttempts - Maximum polling attempts (default: 10)
+   * @returns The file URL or null if not available
+   */
+  async getFileUrl(fileId: string, maxAttempts: number = 10): Promise<string | null> {
+    const query = `
+      query getFile($id: ID!) {
+        node(id: $id) {
+          ... on MediaImage {
+            id
+            image {
+              url
+            }
+            fileStatus
+          }
+          ... on GenericFile {
+            id
+            url
+            fileStatus
+          }
+        }
+      }
+    `;
+
+    try {
+      const client = new this.shopify.clients.Graphql({ session: this.session });
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const response = await client.request(query, {
+          variables: { id: fileId },
+        });
+
+        const body = response.data as {
+          node?: {
+            image?: { url: string };
+            url?: string;
+            fileStatus: string;
+          };
+        };
+
+        const fileStatus = body.node?.fileStatus;
+        const url = body.node?.image?.url || body.node?.url;
+
+        if (fileStatus === 'READY' && url) {
+          logger.debug('File URL retrieved', { fileId, url });
+          return url;
+        }
+
+        if (fileStatus === 'FAILED') {
+          logger.error('File processing failed', { fileId });
+          return null;
+        }
+
+        // Wait before next poll (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+
+      logger.warn('File URL retrieval timed out', { fileId, maxAttempts });
+      return null;
+    } catch (error) {
+      logger.error('Failed to get file URL', {
+        fileId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
 }
 
 export const shopifyClient = new ShopifyClient();

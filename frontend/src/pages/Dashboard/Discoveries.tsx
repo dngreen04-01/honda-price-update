@@ -1,10 +1,10 @@
 // @ts-nocheck
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
-import { Search, Globe, Package, Tag, ExternalLink, EyeOff, RefreshCw, Filter, Loader2, CheckCircle2, AlertCircle, ChevronDown, Square, CheckSquare, MinusSquare, ShoppingBag, Link, ChevronUp, X } from 'lucide-react'
-import { format } from 'date-fns'
-import { DiscoveredProduct, CrawlerOffer } from '../../types/database'
+import { Search, Globe, Package, Tag, ExternalLink, EyeOff, RefreshCw, Filter, Loader2, CheckCircle2, AlertCircle, ChevronDown, Square, CheckSquare, MinusSquare, ShoppingBag, Link, ChevronUp, X, Calendar, Clock, ArrowRight, ShoppingCart, Image as ImageIcon } from 'lucide-react'
+import { format, differenceInDays, isPast, parseISO } from 'date-fns'
+import { DiscoveredProduct, CrawlerOffer, ShopifyOfferPage, ShopifyCatalogProduct, PushOfferResult } from '../../types/database'
 
 type TabType = 'products' | 'offers'
 type StatusFilter = 'pending' | 'reviewed' | 'ignored' | 'added' | 'all'
@@ -41,6 +41,50 @@ export const Discoveries: React.FC = () => {
   const [pushingManual, setPushingManual] = useState(false)
   const [manualResult, setManualResult] = useState<{success: boolean, message: string, url?: string} | null>(null)
 
+  // Offer management state
+  const [selectedOffer, setSelectedOffer] = useState<CrawlerOffer | null>(null)
+  const [offerPanelOpen, setOfferPanelOpen] = useState(false)
+  const [offerShopifyPage, setOfferShopifyPage] = useState<ShopifyOfferPage | null>(null)
+  const [linkedProductIds, setLinkedProductIds] = useState<number[]>([])
+  const [availableProducts, setAvailableProducts] = useState<ShopifyCatalogProduct[]>([])
+  const [loadingProducts, setLoadingProducts] = useState(false)
+  const [offerEndDate, setOfferEndDate] = useState('')
+  const [pushingOffer, setPushingOffer] = useState(false)
+  const [pushOfferResult, setPushOfferResult] = useState<PushOfferResult | null>(null)
+  const [expiringOffers, setExpiringOffers] = useState<CrawlerOffer[]>([])
+  const [offerStatuses, setOfferStatuses] = useState<Record<number, ShopifyOfferPage | null>>({})
+  const [productSearchTerm, setProductSearchTerm] = useState('')
+
+  // Filter products for offer panel based on search term
+  const filteredOfferProducts = useMemo(() => {
+    if (!productSearchTerm.trim()) {
+      // When no search, show selected products first
+      return [...availableProducts].sort((a, b) => {
+        const aSelected = linkedProductIds.includes(a.id) ? 0 : 1
+        const bSelected = linkedProductIds.includes(b.id) ? 0 : 1
+        return aSelected - bSelected
+      })
+    }
+    const term = productSearchTerm.toLowerCase()
+    return availableProducts.filter(product => {
+      // Search across multiple fields
+      const searchableText = [
+        product.product_title,
+        product.variant_sku,
+        product.variant_title,
+        // Also search the source URL which often contains the product name/code
+        product.source_url_canonical,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+
+      // Support multi-word search (all terms must match)
+      const searchTerms = term.split(/\s+/).filter(t => t.length > 0)
+      return searchTerms.every(t => searchableText.includes(t))
+    })
+  }, [availableProducts, productSearchTerm, linkedProductIds])
+
   useEffect(() => {
     loadData()
   }, [statusFilter])
@@ -50,11 +94,12 @@ export const Discoveries: React.FC = () => {
     setError(null)
 
     try {
-      // Fetch products, offers, and stats in parallel
-      const [productsRes, offersRes, statsRes] = await Promise.all([
+      // Fetch products, offers, stats, and expiring offers in parallel
+      const [productsRes, offersRes, statsRes, expiringRes] = await Promise.all([
         fetch(`http://localhost:3000/api/crawl/results${statusFilter !== 'all' ? `?status=${statusFilter}` : ''}`),
         fetch('http://localhost:3000/api/crawl/offers'),
-        fetch('http://localhost:3000/api/crawl/stats')
+        fetch('http://localhost:3000/api/crawl/stats'),
+        fetch('http://localhost:3000/api/offers/expiring?days=7')
       ])
 
       if (!productsRes.ok) throw new Error('Failed to fetch products')
@@ -64,11 +109,33 @@ export const Discoveries: React.FC = () => {
       const productsData = await productsRes.json()
       const offersData = await offersRes.json()
       const statsData = await statsRes.json()
+      const expiringData = expiringRes.ok ? await expiringRes.json() : { offers: [] }
 
       // Handle API responses that may return objects with data property or arrays directly
       setProducts(Array.isArray(productsData) ? productsData : productsData?.products || productsData?.data || [])
-      setOffers(Array.isArray(offersData) ? offersData : offersData?.offers || offersData?.data || [])
+      const offersArray = Array.isArray(offersData) ? offersData : offersData?.offers || offersData?.data || []
+      setOffers(offersArray)
       setStats(statsData)
+      setExpiringOffers(expiringData.offers || [])
+
+      // Fetch Shopify status for each offer
+      const statusPromises = offersArray.map(async (offer: CrawlerOffer) => {
+        try {
+          const res = await fetch(`http://localhost:3000/api/offers/${offer.id}`)
+          if (res.ok) {
+            const data = await res.json()
+            return { id: offer.id, shopifyPage: data.shopifyPage || null }
+          }
+        } catch {
+          // Ignore errors for individual offer status fetches
+        }
+        return { id: offer.id, shopifyPage: null }
+      })
+
+      const statuses = await Promise.all(statusPromises)
+      const statusMap: Record<number, ShopifyOfferPage | null> = {}
+      statuses.forEach(s => { statusMap[s.id] = s.shopifyPage })
+      setOfferStatuses(statusMap)
     } catch (err) {
       console.error('Error loading discoveries:', err)
       setError(err instanceof Error ? err.message : 'Failed to load data')
@@ -238,6 +305,135 @@ export const Discoveries: React.FC = () => {
       setPushingManual(false)
     }
   }
+
+  // Offer management handlers
+  const handleOpenOfferPanel = useCallback(async (offer: CrawlerOffer) => {
+    setSelectedOffer(offer)
+    setOfferPanelOpen(true)
+    setLinkedProductIds([])
+    setPushOfferResult(null)
+    setOfferEndDate(offer.end_date ? offer.end_date.split('T')[0] : '')
+    setOfferShopifyPage(offerStatuses[offer.id] || null)
+
+    // Fetch available products from Shopify catalog
+    setLoadingProducts(true)
+    try {
+      const [catalogRes, linkedRes] = await Promise.all([
+        fetch('http://localhost:3000/api/shopify/catalog'),
+        fetch(`http://localhost:3000/api/offers/${offer.id}/products`)
+      ])
+
+      if (catalogRes.ok) {
+        const catalogData = await catalogRes.json()
+        setAvailableProducts(catalogData.products || [])
+      }
+
+      if (linkedRes.ok) {
+        const linkedData = await linkedRes.json()
+        const linkedIds = (linkedData.products || []).map((p: ShopifyCatalogProduct) => p.id)
+        setLinkedProductIds(linkedIds)
+      }
+    } catch (err) {
+      console.error('Error loading products:', err)
+    } finally {
+      setLoadingProducts(false)
+    }
+  }, [offerStatuses])
+
+  const handleCloseOfferPanel = useCallback(() => {
+    setOfferPanelOpen(false)
+    setSelectedOffer(null)
+    setLinkedProductIds([])
+    setAvailableProducts([])
+    setPushOfferResult(null)
+    setProductSearchTerm('')
+  }, [])
+
+  const toggleProductLink = useCallback((productId: number) => {
+    setLinkedProductIds(prev => {
+      if (prev.includes(productId)) {
+        return prev.filter(id => id !== productId)
+      }
+      return [...prev, productId]
+    })
+  }, [])
+
+  const handlePushOfferToShopify = useCallback(async () => {
+    if (!selectedOffer) return
+
+    setPushingOffer(true)
+    setPushOfferResult(null)
+
+    try {
+      const response = await fetch('http://localhost:3000/api/offers/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offerId: selectedOffer.id,
+          productIds: linkedProductIds,
+          endDate: offerEndDate || undefined
+        })
+      })
+
+      const result: PushOfferResult = await response.json()
+      setPushOfferResult(result)
+
+      if (result.success) {
+        // Reload data to reflect changes
+        await loadData()
+        // Update the offer status in the panel
+        setOfferShopifyPage({
+          id: 0,
+          offer_id: selectedOffer.id,
+          shopify_page_id: result.shopifyPageId || '',
+          shopify_page_handle: '',
+          hero_image_shopify_url: null,
+          status: 'active',
+          landing_tile_html: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+      }
+    } catch (err) {
+      console.error('Error pushing offer to Shopify:', err)
+      setPushOfferResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Network error - please try again'
+      })
+    } finally {
+      setPushingOffer(false)
+    }
+  }, [selectedOffer, linkedProductIds, offerEndDate])
+
+  const getOfferStatus = useCallback((offer: CrawlerOffer): 'pending' | 'active' | 'hidden' | 'expired' => {
+    const shopifyPage = offerStatuses[offer.id]
+    if (!shopifyPage) return 'pending'
+    if (shopifyPage.status === 'hidden' || shopifyPage.status === 'deleted') return 'hidden'
+    if (offer.end_date && isPast(parseISO(offer.end_date))) return 'expired'
+    return 'active'
+  }, [offerStatuses])
+
+  const isOfferExpiringSoon = useCallback((offer: CrawlerOffer): boolean => {
+    if (!offer.end_date) return false
+    const endDate = parseISO(offer.end_date)
+    const daysUntilExpiry = differenceInDays(endDate, new Date())
+    return daysUntilExpiry >= 0 && daysUntilExpiry <= 7
+  }, [])
+
+  const getOfferStatusBadge = useCallback((status: 'pending' | 'active' | 'hidden' | 'expired') => {
+    switch (status) {
+      case 'pending':
+        return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+      case 'active':
+        return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+      case 'hidden':
+        return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-400'
+      case 'expired':
+        return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+      default:
+        return 'bg-gray-100 text-gray-800'
+    }
+  }, [])
 
   // Selection handlers
   const toggleProductSelection = (productId: number) => {
@@ -971,43 +1167,100 @@ export const Discoveries: React.FC = () => {
           {activeTab === 'offers' && (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {filteredOffers.length > 0 ? (
-                filteredOffers.map((offer) => (
-                  <Card key={offer.id} className="overflow-hidden">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">{offer.title}</CardTitle>
-                      {offer.domain?.name && (
-                        <CardDescription className="flex items-center gap-1">
-                          <Globe className="h-3 w-3" />
-                          {offer.domain.name}
-                        </CardDescription>
-                      )}
-                    </CardHeader>
-                    <CardContent>
-                      {offer.summary && (
-                        <p className="text-sm text-muted-foreground mb-3">
-                          {offer.summary.length > 150
-                            ? `${offer.summary.substring(0, 150)}...`
-                            : offer.summary
-                          }
-                        </p>
-                      )}
-                      <div className="flex items-center justify-between">
-                        <a
-                          href={offer.offer_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
-                        >
-                          View Offer
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                        <span className="text-xs text-muted-foreground">
-                          {format(new Date(offer.created_at), 'PP')}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))
+                filteredOffers.map((offer) => {
+                  const status = getOfferStatus(offer)
+                  const expiringSoon = isOfferExpiringSoon(offer)
+                  const shopifyPage = offerStatuses[offer.id]
+
+                  return (
+                    <Card key={offer.id} className={`overflow-hidden ${expiringSoon && status === 'active' ? 'border-orange-300 dark:border-orange-700' : ''}`}>
+                      <CardHeader className="pb-2">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <CardTitle className="text-base truncate">{offer.title}</CardTitle>
+                            {offer.domain?.name && (
+                              <CardDescription className="flex items-center gap-1">
+                                <Globe className="h-3 w-3" />
+                                {offer.domain.name}
+                              </CardDescription>
+                            )}
+                          </div>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ml-2 flex-shrink-0 ${getOfferStatusBadge(status)}`}>
+                            {status}
+                          </span>
+                        </div>
+                      </CardHeader>
+                      <CardContent>
+                        {offer.summary && (
+                          <p className="text-sm text-muted-foreground mb-3">
+                            {offer.summary.length > 120
+                              ? `${offer.summary.substring(0, 120)}...`
+                              : offer.summary
+                            }
+                          </p>
+                        )}
+
+                        {/* End date and expiring warning */}
+                        {offer.end_date && (
+                          <div className={`flex items-center gap-2 text-xs mb-3 ${expiringSoon ? 'text-orange-600 dark:text-orange-400' : 'text-muted-foreground'}`}>
+                            <Calendar className="h-3 w-3" />
+                            <span>
+                              {expiringSoon ? (
+                                <>
+                                  <Clock className="inline h-3 w-3 mr-1" />
+                                  Expires {format(parseISO(offer.end_date), 'PP')}
+                                  {' '}({differenceInDays(parseISO(offer.end_date), new Date())} days left)
+                                </>
+                              ) : (
+                                <>Ends {format(parseISO(offer.end_date), 'PP')}</>
+                              )}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Shopify page link if active */}
+                        {shopifyPage && shopifyPage.status === 'active' && (
+                          <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 mb-3">
+                            <ShoppingBag className="h-3 w-3" />
+                            <span>Live on Shopify</span>
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100 dark:border-gray-800">
+                          <a
+                            href={offer.offer_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                          >
+                            Source
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                          <button
+                            onClick={() => handleOpenOfferPanel(offer)}
+                            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                              status === 'pending'
+                                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                            }`}
+                          >
+                            {status === 'pending' ? (
+                              <>
+                                <ShoppingCart className="h-3 w-3" />
+                                Push to Shopify
+                              </>
+                            ) : (
+                              <>
+                                Manage
+                                <ArrowRight className="h-3 w-3" />
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )
+                })
               ) : (
                 <div className="col-span-full p-8 text-center text-muted-foreground">
                   {searchTerm ? 'No offers match your search' : 'No offers found'}
@@ -1017,6 +1270,299 @@ export const Discoveries: React.FC = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* Offer Management Slide-out Panel */}
+      {offerPanelOpen && selectedOffer && (
+        <div className="fixed inset-0 z-50 overflow-hidden">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 transition-opacity"
+            onClick={handleCloseOfferPanel}
+          />
+
+          {/* Panel */}
+          <div className="absolute inset-y-0 right-0 w-full max-w-xl bg-white dark:bg-gray-900 shadow-xl overflow-y-auto">
+            {/* Panel Header */}
+            <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-semibold">{selectedOffer.title}</h2>
+                  <p className="text-sm text-muted-foreground">
+                    {selectedOffer.domain?.name || 'Unknown domain'}
+                  </p>
+                </div>
+                <button
+                  onClick={handleCloseOfferPanel}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Panel Content */}
+            <div className="p-6 space-y-6">
+              {/* Status Section */}
+              <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium">Shopify Status</span>
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getOfferStatusBadge(getOfferStatus(selectedOffer))}`}>
+                    {getOfferStatus(selectedOffer)}
+                  </span>
+                </div>
+                {offerShopifyPage && offerShopifyPage.status === 'active' && (
+                  <p className="text-sm text-green-600 dark:text-green-400">
+                    This offer is live on your Shopify store
+                  </p>
+                )}
+                {!offerShopifyPage && (
+                  <p className="text-sm text-muted-foreground">
+                    This offer has not been pushed to Shopify yet
+                  </p>
+                )}
+              </div>
+
+              {/* Offer Details */}
+              <div>
+                <h3 className="text-sm font-medium mb-2">Offer Summary</h3>
+                {selectedOffer.summary ? (
+                  <p className="text-sm text-muted-foreground">{selectedOffer.summary}</p>
+                ) : (
+                  <p className="text-sm text-muted-foreground italic">No summary available</p>
+                )}
+                <a
+                  href={selectedOffer.offer_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 mt-2"
+                >
+                  View source page
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+
+              {/* End Date Picker */}
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  <Calendar className="inline h-4 w-4 mr-1" />
+                  Offer End Date
+                </label>
+                <input
+                  type="date"
+                  value={offerEndDate}
+                  onChange={(e) => setOfferEndDate(e.target.value)}
+                  disabled={offerShopifyPage?.status === 'active'}
+                  className="w-full px-4 py-2 rounded-lg text-sm bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+                />
+                {selectedOffer.end_date && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Original end date from source: {format(parseISO(selectedOffer.end_date), 'PP')}
+                  </p>
+                )}
+              </div>
+
+              {/* Product Selection */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium">
+                    <ShoppingCart className="inline h-4 w-4 mr-1" />
+                    Link Products to Offer
+                  </label>
+                  <span className="text-xs text-muted-foreground">
+                    {linkedProductIds.length} selected
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Select products from your Shopify catalog to display on this offer page
+                </p>
+
+                {loadingProducts ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-blue-600" />
+                    <span className="ml-2 text-sm text-muted-foreground">Loading products...</span>
+                  </div>
+                ) : availableProducts.length > 0 ? (
+                  <div className="space-y-2">
+                    {/* Product Search */}
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={productSearchTerm}
+                        onChange={(e) => setProductSearchTerm(e.target.value)}
+                        placeholder="Search by name or SKU..."
+                        className="w-full pl-9 pr-4 py-2 text-sm rounded-lg bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      {productSearchTerm && (
+                        <button
+                          onClick={() => setProductSearchTerm('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    {/* Product count */}
+                    <p className="text-xs text-muted-foreground">
+                      {productSearchTerm
+                        ? `${filteredOfferProducts.length} of ${availableProducts.length} products`
+                        : `${availableProducts.length} products`}
+                    </p>
+                    {/* Product List */}
+                    <div className="max-h-64 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg">
+                      {filteredOfferProducts.length > 0 ? filteredOfferProducts.map((product) => {
+                      const isSelected = linkedProductIds.includes(product.id)
+                      return (
+                        <button
+                          key={product.id}
+                          onClick={() => toggleProductLink(product.id)}
+                          disabled={offerShopifyPage?.status === 'active'}
+                          className={`w-full flex items-center gap-3 p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800 border-b border-gray-100 dark:border-gray-800 last:border-b-0 disabled:opacity-50 disabled:cursor-not-allowed ${
+                            isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                          }`}
+                        >
+                          {/* Product thumbnail placeholder */}
+                          <div className="w-12 h-12 bg-gray-200 dark:bg-gray-700 rounded flex items-center justify-center flex-shrink-0">
+                            {product.shopify_image_url ? (
+                              <img
+                                src={product.shopify_image_url}
+                                alt={product.product_title || 'Product'}
+                                className="w-full h-full object-cover rounded"
+                              />
+                            ) : (
+                              <ImageIcon className="h-5 w-5 text-gray-400" />
+                            )}
+                          </div>
+
+                          {/* Product info */}
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              {product.product_title || 'Unknown Product'}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {product.variant_sku || 'No SKU'}
+                              {product.shopify_price && ` • $${product.shopify_price.toFixed(2)}`}
+                            </p>
+                          </div>
+
+                          {/* Selection indicator */}
+                          {isSelected ? (
+                            <CheckSquare className="h-5 w-5 text-blue-600 flex-shrink-0" />
+                          ) : (
+                            <Square className="h-5 w-5 text-gray-400 flex-shrink-0" />
+                          )}
+                        </button>
+                      )
+                    }) : (
+                      <div className="p-4 text-center text-sm text-muted-foreground">
+                        No products match "{productSearchTerm}"
+                      </div>
+                    )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 text-center text-sm text-muted-foreground border border-gray-200 dark:border-gray-700 rounded-lg">
+                    No products found in your Shopify catalog.
+                    <br />
+                    <span className="text-xs">Push some products first before creating offer pages.</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Push Result Feedback */}
+              {pushOfferResult && (
+                <div className={`flex items-start gap-3 p-4 rounded-lg ${
+                  pushOfferResult.success
+                    ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800'
+                    : 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+                }`}>
+                  {pushOfferResult.success ? (
+                    <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                  )}
+                  <div className="flex-1">
+                    <p className={`text-sm font-medium ${
+                      pushOfferResult.success
+                        ? 'text-green-700 dark:text-green-300'
+                        : 'text-red-700 dark:text-red-300'
+                    }`}>
+                      {pushOfferResult.success ? 'Offer successfully pushed to Shopify!' : (pushOfferResult.message || 'Failed to push offer')}
+                    </p>
+                    {pushOfferResult.warnings && pushOfferResult.warnings.length > 0 && (
+                      <ul className="mt-2 text-xs text-muted-foreground list-disc list-inside">
+                        {pushOfferResult.warnings.map((warning, i) => (
+                          <li key={i}>{warning}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {pushOfferResult.shopifyPageUrl && (
+                      <a
+                        href={pushOfferResult.shopifyPageUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 mt-2 text-sm text-green-600 dark:text-green-400 hover:underline"
+                      >
+                        View in Shopify Admin
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => setPushOfferResult(null)}
+                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
+                <button
+                  onClick={handleCloseOfferPanel}
+                  className="flex-1 px-4 py-2 rounded-lg text-sm font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                {offerShopifyPage?.status === 'active' ? (
+                  <button
+                    disabled
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-green-100 text-green-800 cursor-not-allowed"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    Already Published
+                  </button>
+                ) : (
+                  <button
+                    onClick={handlePushOfferToShopify}
+                    disabled={pushingOffer || linkedProductIds.length === 0}
+                    className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {pushingOffer ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Pushing to Shopify...
+                      </>
+                    ) : (
+                      <>
+                        <ShoppingBag className="h-4 w-4" />
+                        Push to Shopify
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+
+              {linkedProductIds.length === 0 && !offerShopifyPage && (
+                <p className="text-xs text-center text-muted-foreground">
+                  Select at least one product to push this offer to Shopify
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

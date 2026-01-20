@@ -30,10 +30,23 @@ import {
 import { handleScrapeBike } from './api/bike-scraper-api.js';
 import { handlePushToShopify, handlePushUrlToShopify } from './api/shopify-push-api.js';
 import { scheduleWeeklyCrawl, weeklyCrawlerJob } from './scheduler/weekly-crawler-job.js';
+import { scheduleNightlyScrape, nightlyScraperJob } from './scheduler/nightly-scraper-job.js';
 import {
   handleStartSupplierRescrape,
   handleGetSupplierRescrapeStatus,
 } from './api/supplier-rescrape-api.js';
+import {
+  handlePushOffer,
+  handleLinkProducts,
+  handleUnlinkProducts,
+  handleGetOfferProducts,
+  handleUpdateEndDate,
+  handleGetOfferWithProducts,
+  handleGetShopifyCatalog,
+  handleCheckExpirations,
+  handleGetExpiringOffers,
+  handleExpireOffer,
+} from './api/offer-push-api.js';
 
 const app = express();
 const PORT = process.env.API_PORT || 3000;
@@ -184,6 +197,41 @@ app.post('/api/shopify/push-product', handlePushToShopify);
 // Push product to Shopify directly from URL (manual entry)
 app.post('/api/shopify/push-url', handlePushUrlToShopify);
 
+// Get Shopify catalog (for product selection in offer UI)
+app.get('/api/shopify/catalog', handleGetShopifyCatalog);
+
+// ============================================
+// Offer Push API Endpoints
+// ============================================
+
+// Push an offer to Shopify (creates page, links products, updates landing page)
+app.post('/api/offers/push', handlePushOffer);
+
+// Check and expire offers past their end date
+app.post('/api/offers/check-expirations', handleCheckExpirations);
+
+// Get offers expiring soon (for dashboard warnings)
+// NOTE: Must be defined BEFORE /api/offers/:id to avoid matching "expiring" as an ID
+app.get('/api/offers/expiring', handleGetExpiringOffers);
+
+// Get offer with linked products and Shopify status
+app.get('/api/offers/:id', handleGetOfferWithProducts);
+
+// Get products linked to an offer
+app.get('/api/offers/:id/products', handleGetOfferProducts);
+
+// Link products to an offer
+app.post('/api/offers/:id/link-products', handleLinkProducts);
+
+// Unlink products from an offer
+app.delete('/api/offers/:id/link-products', handleUnlinkProducts);
+
+// Update an offer's end date
+app.post('/api/offers/:id/update-end-date', handleUpdateEndDate);
+
+// Manually expire a specific offer
+app.post('/api/offers/:id/expire', handleExpireOffer);
+
 // Start server
 app.listen(PORT, () => {
   logger.info(`API server started`, { port: PORT });
@@ -192,8 +240,29 @@ app.listen(PORT, () => {
 
   // Start the weekly crawler scheduler
   if (process.env.DISABLE_WEEKLY_CRAWLER !== 'true') {
-    scheduleWeeklyCrawl();
-    const config = weeklyCrawlerJob.getScheduleConfig();
-    console.log(`Weekly crawler scheduled: ${config.description}`);
+    scheduleWeeklyCrawl()
+      .then(() => {
+        const config = weeklyCrawlerJob.getScheduleConfig();
+        console.log(`Weekly crawler scheduled: ${config.description}`);
+      })
+      .catch((error) => {
+        logger.error('Failed to start weekly crawler scheduler', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  // Start the nightly price scraper scheduler
+  if (process.env.DISABLE_NIGHTLY_SCRAPER !== 'true') {
+    scheduleNightlyScrape()
+      .then(() => {
+        const config = nightlyScraperJob.getScheduleConfig();
+        console.log(`Nightly scraper scheduled: ${config.description}`);
+      })
+      .catch((error) => {
+        logger.error('Failed to start nightly scraper scheduler', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
   }
 });

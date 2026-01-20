@@ -5,6 +5,9 @@ import {
   PriceHistory,
   Offer,
   Domain,
+  ShopifyOfferPage,
+  OfferProductLink,
+  OfferPageStatus,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { extractProductId } from '../utils/extract-product-id.js';
@@ -533,6 +536,43 @@ export async function updateCrawlRun(
   }
 
   logger.debug('Updated crawl run', { runId: id, updates });
+}
+
+/**
+ * Clean up stale crawl runs that have been "running" for too long
+ * This handles orphaned runs from crashed processes
+ * @param maxAgeHours - Maximum age in hours for a "running" crawl (default: 24)
+ * @returns Number of runs cleaned up
+ */
+export async function cleanupStaleCrawlRuns(maxAgeHours: number = 24): Promise<number> {
+  const cutoffTime = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('crawl_runs')
+    .update({
+      status: 'failed',
+      completed_at: new Date().toISOString(),
+      error_message: `Orphaned run - marked as failed after ${maxAgeHours}h without completion`,
+    })
+    .eq('status', 'running')
+    .lt('started_at', cutoffTime)
+    .select('id');
+
+  if (error) {
+    logger.error('Failed to cleanup stale crawl runs', { error: error.message });
+    throw error;
+  }
+
+  const cleanedCount = data?.length || 0;
+  if (cleanedCount > 0) {
+    logger.warn('Cleaned up stale crawl runs', {
+      count: cleanedCount,
+      runIds: data?.map((r) => r.id),
+      maxAgeHours,
+    });
+  }
+
+  return cleanedCount;
 }
 
 /**
@@ -1144,5 +1184,467 @@ export async function deleteDiscoveredProductsByIds(ids: number[]): Promise<numb
   });
 
   return deletedCount;
+}
+
+// ============================================================================
+// Shopify Offer Pages Queries
+// ============================================================================
+
+/**
+ * Create a new Shopify offer page record
+ * @param offerId - The offer ID this page is for
+ * @param shopifyPageId - The Shopify page GID
+ * @param shopifyPageHandle - The URL handle for the page
+ * @param heroImageShopifyUrl - Optional URL of the uploaded hero image
+ * @param landingTileHtml - Optional cached tile HTML for the landing page
+ * @returns The created ShopifyOfferPage record
+ */
+export async function createShopifyOfferPage(
+  offerId: number,
+  shopifyPageId: string,
+  shopifyPageHandle: string,
+  heroImageShopifyUrl?: string | null,
+  landingTileHtml?: string | null
+): Promise<ShopifyOfferPage> {
+  const { data, error } = await supabase
+    .from('shopify_offer_pages')
+    .insert({
+      offer_id: offerId,
+      shopify_page_id: shopifyPageId,
+      shopify_page_handle: shopifyPageHandle,
+      hero_image_shopify_url: heroImageShopifyUrl || null,
+      landing_tile_html: landingTileHtml || null,
+      status: 'active',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    logger.error('Failed to create Shopify offer page', {
+      error: error.message,
+      offerId,
+      shopifyPageId,
+    });
+    throw error;
+  }
+
+  logger.info('Created Shopify offer page', {
+    id: data.id,
+    offerId,
+    shopifyPageId,
+    handle: shopifyPageHandle,
+  });
+
+  return data as ShopifyOfferPage;
+}
+
+/**
+ * Update the status of a Shopify offer page
+ * @param id - The shopify_offer_pages record ID
+ * @param status - New status ('active', 'hidden', 'deleted')
+ * @returns Whether the update was successful
+ */
+export async function updateShopifyOfferPageStatus(
+  id: number,
+  status: OfferPageStatus
+): Promise<boolean> {
+  const { error, count } = await supabase
+    .from('shopify_offer_pages')
+    .update({
+      status,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+
+  if (error) {
+    logger.error('Failed to update Shopify offer page status', {
+      error: error.message,
+      id,
+      status,
+    });
+    throw error;
+  }
+
+  const updated = (count ?? 0) > 0 || !error;
+  logger.info('Updated Shopify offer page status', { id, status, updated });
+  return updated;
+}
+
+/**
+ * Get a Shopify offer page by offer ID
+ * @param offerId - The offer ID to look up
+ * @returns The ShopifyOfferPage record or null if not found
+ */
+export async function getShopifyOfferPageByOfferId(
+  offerId: number
+): Promise<ShopifyOfferPage | null> {
+  const { data, error } = await supabase
+    .from('shopify_offer_pages')
+    .select('*')
+    .eq('offer_id', offerId)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    logger.error('Failed to fetch Shopify offer page by offer ID', {
+      error: error.message,
+      offerId,
+    });
+    throw error;
+  }
+
+  return data as ShopifyOfferPage | null;
+}
+
+/**
+ * Get all active Shopify offer pages
+ * @returns Array of active ShopifyOfferPage records
+ */
+export async function getActiveShopifyOfferPages(): Promise<ShopifyOfferPage[]> {
+  const { data, error } = await supabase
+    .from('shopify_offer_pages')
+    .select('*')
+    .eq('status', 'active')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    logger.error('Failed to fetch active Shopify offer pages', {
+      error: error.message,
+    });
+    throw error;
+  }
+
+  return data as ShopifyOfferPage[];
+}
+
+/**
+ * Update the landing tile HTML for an offer page
+ * @param id - The shopify_offer_pages record ID
+ * @param landingTileHtml - The new tile HTML
+ * @returns Whether the update was successful
+ */
+export async function updateShopifyOfferPageTileHtml(
+  id: number,
+  landingTileHtml: string
+): Promise<boolean> {
+  const { error, count } = await supabase
+    .from('shopify_offer_pages')
+    .update({
+      landing_tile_html: landingTileHtml,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+
+  if (error) {
+    logger.error('Failed to update Shopify offer page tile HTML', {
+      error: error.message,
+      id,
+    });
+    throw error;
+  }
+
+  const updated = (count ?? 0) > 0 || !error;
+  logger.debug('Updated Shopify offer page tile HTML', { id, updated });
+  return updated;
+}
+
+// ============================================================================
+// Offer Product Links Queries
+// ============================================================================
+
+/**
+ * Link a product to an offer
+ * @param offerId - The offer ID
+ * @param productId - The product ID (from shopify_catalog_cache)
+ * @returns The created OfferProductLink record
+ */
+export async function linkProductToOffer(
+  offerId: number,
+  productId: number
+): Promise<OfferProductLink> {
+  const { data, error } = await supabase
+    .from('offer_product_links')
+    .upsert(
+      {
+        offer_id: offerId,
+        product_id: productId,
+      },
+      { onConflict: 'offer_id,product_id' }
+    )
+    .select()
+    .single();
+
+  if (error) {
+    logger.error('Failed to link product to offer', {
+      error: error.message,
+      offerId,
+      productId,
+    });
+    throw error;
+  }
+
+  logger.debug('Linked product to offer', { offerId, productId, linkId: data.id });
+  return data as OfferProductLink;
+}
+
+/**
+ * Unlink a product from an offer
+ * @param offerId - The offer ID
+ * @param productId - The product ID
+ * @returns Whether the unlink was successful
+ */
+export async function unlinkProductFromOffer(
+  offerId: number,
+  productId: number
+): Promise<boolean> {
+  const { error, count } = await supabase
+    .from('offer_product_links')
+    .delete()
+    .eq('offer_id', offerId)
+    .eq('product_id', productId);
+
+  if (error) {
+    logger.error('Failed to unlink product from offer', {
+      error: error.message,
+      offerId,
+      productId,
+    });
+    throw error;
+  }
+
+  const deleted = (count ?? 0) > 0 || !error;
+  logger.debug('Unlinked product from offer', { offerId, productId, deleted });
+  return deleted;
+}
+
+/**
+ * Get all products linked to an offer
+ * Returns full ShopifyCatalogCache entries for displaying product info
+ * @param offerId - The offer ID
+ * @returns Array of ShopifyCatalogCache entries linked to the offer
+ */
+export async function getProductsForOffer(
+  offerId: number
+): Promise<ShopifyCatalogCache[]> {
+  const { data, error } = await supabase
+    .from('offer_product_links')
+    .select('product_id')
+    .eq('offer_id', offerId);
+
+  if (error) {
+    logger.error('Failed to fetch product links for offer', {
+      error: error.message,
+      offerId,
+    });
+    throw error;
+  }
+
+  if (data.length === 0) {
+    return [];
+  }
+
+  const productIds = data.map((link) => link.product_id);
+
+  const { data: products, error: productsError } = await supabase
+    .from('shopify_catalog_cache')
+    .select('*')
+    .in('id', productIds);
+
+  if (productsError) {
+    logger.error('Failed to fetch products for offer', {
+      error: productsError.message,
+      offerId,
+      productIds,
+    });
+    throw productsError;
+  }
+
+  return products as ShopifyCatalogCache[];
+}
+
+/**
+ * Get all offers a product is linked to
+ * @param productId - The product ID (from shopify_catalog_cache)
+ * @returns Array of Offer records
+ */
+export async function getOffersForProduct(productId: number): Promise<Offer[]> {
+  const { data, error } = await supabase
+    .from('offer_product_links')
+    .select('offer_id')
+    .eq('product_id', productId);
+
+  if (error) {
+    logger.error('Failed to fetch offer links for product', {
+      error: error.message,
+      productId,
+    });
+    throw error;
+  }
+
+  if (data.length === 0) {
+    return [];
+  }
+
+  const offerIds = data.map((link) => link.offer_id);
+
+  const { data: offers, error: offersError } = await supabase
+    .from('offers')
+    .select('*')
+    .in('id', offerIds);
+
+  if (offersError) {
+    logger.error('Failed to fetch offers for product', {
+      error: offersError.message,
+      productId,
+      offerIds,
+    });
+    throw offersError;
+  }
+
+  return offers as Offer[];
+}
+
+/**
+ * Get offer by ID
+ * @param offerId - The offer ID
+ * @returns The Offer record or null if not found
+ */
+export async function getOfferById(offerId: number): Promise<Offer | null> {
+  const { data, error } = await supabase
+    .from('offers')
+    .select('*')
+    .eq('id', offerId)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    logger.error('Failed to fetch offer by ID', {
+      error: error.message,
+      offerId,
+    });
+    throw error;
+  }
+
+  return data as Offer | null;
+}
+
+/**
+ * Update offer end date
+ * @param offerId - The offer ID
+ * @param endDate - The new end date
+ * @returns Whether the update was successful
+ */
+export async function updateOfferEndDate(
+  offerId: number,
+  endDate: Date
+): Promise<boolean> {
+  const { error, count } = await supabase
+    .from('offers')
+    .update({
+      end_date: endDate.toISOString().split('T')[0],
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', offerId);
+
+  if (error) {
+    logger.error('Failed to update offer end date', {
+      error: error.message,
+      offerId,
+      endDate,
+    });
+    throw error;
+  }
+
+  const updated = (count ?? 0) > 0 || !error;
+  logger.info('Updated offer end date', { offerId, endDate, updated });
+  return updated;
+}
+
+/**
+ * Get expired active offer pages (for expiration service)
+ * Returns offer pages where status='active' and the linked offer's end_date is in the past
+ * @returns Array of expired ShopifyOfferPage records with their offer data
+ */
+export async function getExpiredActiveOfferPages(): Promise<
+  Array<ShopifyOfferPage & { offer: Offer }>
+> {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Get all active offer pages
+  const { data: offerPages, error: pagesError } = await supabase
+    .from('shopify_offer_pages')
+    .select('*')
+    .eq('status', 'active');
+
+  if (pagesError) {
+    logger.error('Failed to fetch active offer pages for expiration check', {
+      error: pagesError.message,
+    });
+    throw pagesError;
+  }
+
+  if (offerPages.length === 0) {
+    return [];
+  }
+
+  // Get the offers for these pages
+  const offerIds = offerPages.map((page) => page.offer_id);
+  const { data: offers, error: offersError } = await supabase
+    .from('offers')
+    .select('*')
+    .in('id', offerIds)
+    .lt('end_date', today);
+
+  if (offersError) {
+    logger.error('Failed to fetch offers for expiration check', {
+      error: offersError.message,
+    });
+    throw offersError;
+  }
+
+  // Match expired offers with their pages
+  const expiredOfferIds = new Set(offers.map((o) => o.id));
+  const expiredPages = offerPages
+    .filter((page) => expiredOfferIds.has(page.offer_id))
+    .map((page) => ({
+      ...page,
+      offer: offers.find((o) => o.id === page.offer_id)!,
+    })) as Array<ShopifyOfferPage & { offer: Offer }>;
+
+  logger.debug('Found expired active offer pages', {
+    totalActivePages: offerPages.length,
+    expiredCount: expiredPages.length,
+  });
+
+  return expiredPages;
+}
+
+/**
+ * Get offers expiring within a specified number of days
+ * @param withinDays - Number of days to look ahead (default: 7)
+ * @returns Array of offers expiring soon
+ */
+export async function getExpiringOffers(withinDays: number = 7): Promise<Offer[]> {
+  const today = new Date();
+  const futureDate = new Date();
+  futureDate.setDate(today.getDate() + withinDays);
+
+  const todayStr = today.toISOString().split('T')[0];
+  const futureDateStr = futureDate.toISOString().split('T')[0];
+
+  const { data, error } = await supabase
+    .from('offers')
+    .select('*')
+    .gte('end_date', todayStr)
+    .lte('end_date', futureDateStr)
+    .order('end_date', { ascending: true });
+
+  if (error) {
+    logger.error('Failed to fetch expiring offers', {
+      error: error.message,
+      withinDays,
+    });
+    throw error;
+  }
+
+  return data as Offer[];
 }
 

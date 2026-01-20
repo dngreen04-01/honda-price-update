@@ -283,6 +283,61 @@ export interface Database {
           created_at?: string
         }
       }
+      shopify_offer_pages: {
+        Row: {
+          id: number
+          offer_id: number
+          shopify_page_id: string
+          shopify_page_handle: string
+          hero_image_shopify_url: string | null
+          status: 'active' | 'hidden' | 'deleted'
+          landing_tile_html: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          offer_id: number
+          shopify_page_id: string
+          shopify_page_handle: string
+          hero_image_shopify_url?: string | null
+          status?: 'active' | 'hidden' | 'deleted'
+          landing_tile_html?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          offer_id?: number
+          shopify_page_id?: string
+          shopify_page_handle?: string
+          hero_image_shopify_url?: string | null
+          status?: 'active' | 'hidden' | 'deleted'
+          landing_tile_html?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      offer_product_links: {
+        Row: {
+          id: number
+          offer_id: number
+          product_id: number
+          created_at: string
+        }
+        Insert: {
+          id?: number
+          offer_id: number
+          product_id: number
+          created_at?: string
+        }
+        Update: {
+          id?: number
+          offer_id?: number
+          product_id?: number
+          created_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -344,6 +399,55 @@ export interface CrawlerOffer {
   title: string
   offer_url: string
   summary: string | null
+  start_date: string | null
+  end_date: string | null
   created_at: string
   domain?: { name: string }
+}
+
+// Extended offer with Shopify status for the UI
+export interface OfferWithShopifyStatus extends CrawlerOffer {
+  shopifyOfferPage?: ShopifyOfferPage | null
+  linkedProductCount?: number
+}
+
+// Shopify catalog cache product (for product selection in offers)
+export interface ShopifyCatalogProduct {
+  id: number
+  shopify_product_id: string
+  shopify_variant_id: string
+  source_url_canonical: string
+  shopify_price: number | null
+  shopify_compare_at_price: number | null
+  product_title: string | null
+  variant_title: string | null
+  variant_sku: string | null
+  shopify_image_url?: string | null
+  last_synced_at: string
+  created_at: string
+  updated_at: string
+}
+
+// Offer Page Management Types
+export type OfferPageStatus = 'active' | 'hidden' | 'deleted'
+
+export type ShopifyOfferPage = Database['public']['Tables']['shopify_offer_pages']['Row']
+export type OfferProductLink = Database['public']['Tables']['offer_product_links']['Row']
+
+export interface OfferWithProducts extends CrawlerOffer {
+  shopifyOfferPage?: ShopifyOfferPage | null
+  linkedProducts?: Database['public']['Tables']['shopify_catalog_cache']['Row'][]
+}
+
+export interface PushOfferResult {
+  success: boolean
+  shopifyPageId?: string
+  shopifyPageUrl?: string
+  message?: string
+  warnings?: string[]
+}
+
+export interface ExpireResult {
+  expiredCount: number
+  errors: string[]
 }
