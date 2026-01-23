@@ -16,7 +16,7 @@ ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm install
 
 # Copy source code
 COPY . .
