@@ -156,7 +156,7 @@ export async function handleGetSupplierRescrapeStatus(
   res: Response
 ): Promise<void> {
   try {
-    const { jobId } = req.params;
+    const jobId = req.params.jobId as string;
 
     const job = activeJobs.get(jobId);
 

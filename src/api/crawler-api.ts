@@ -187,7 +187,7 @@ async function runCrawlAsync(
  */
 export async function handleGetCrawlStatus(req: Request, res: Response): Promise<void> {
   try {
-    const runId = parseInt(req.params.runId, 10);
+    const runId = parseInt(req.params.runId as string, 10);
 
     if (isNaN(runId)) {
       res.status(400).json({
@@ -288,7 +288,7 @@ export async function handleGetOffers(req: Request, res: Response): Promise<void
  */
 export async function handleReviewProduct(req: Request, res: Response): Promise<void> {
   try {
-    const productId = parseInt(req.params.productId, 10);
+    const productId = parseInt(req.params.productId as string, 10);
 
     if (isNaN(productId)) {
       res.status(400).json({

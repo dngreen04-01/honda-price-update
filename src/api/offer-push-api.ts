@@ -125,7 +125,7 @@ export async function handlePushOffer(req: Request, res: Response): Promise<void
  * - productIds: number[] (required) - Array of product IDs to link
  */
 export async function handleLinkProducts(req: Request, res: Response): Promise<void> {
-  const offerId = parseInt(req.params.id, 10);
+  const offerId = parseInt(req.params.id as string, 10);
   const { productIds } = req.body;
 
   if (isNaN(offerId)) {
@@ -191,7 +191,7 @@ export async function handleLinkProducts(req: Request, res: Response): Promise<v
  * - productIds: number[] (required) - Array of product IDs to unlink
  */
 export async function handleUnlinkProducts(req: Request, res: Response): Promise<void> {
-  const offerId = parseInt(req.params.id, 10);
+  const offerId = parseInt(req.params.id as string, 10);
   const { productIds } = req.body;
 
   if (isNaN(offerId)) {
@@ -249,7 +249,7 @@ export async function handleUnlinkProducts(req: Request, res: Response): Promise
  * GET /api/offers/:id/products
  */
 export async function handleGetOfferProducts(req: Request, res: Response): Promise<void> {
-  const offerId = parseInt(req.params.id, 10);
+  const offerId = parseInt(req.params.id as string, 10);
 
   if (isNaN(offerId)) {
     res.status(400).json({
@@ -287,7 +287,7 @@ export async function handleGetOfferProducts(req: Request, res: Response): Promi
  * - endDate: string (required) - ISO date string
  */
 export async function handleUpdateEndDate(req: Request, res: Response): Promise<void> {
-  const offerId = parseInt(req.params.id, 10);
+  const offerId = parseInt(req.params.id as string, 10);
   const { endDate } = req.body;
 
   if (isNaN(offerId)) {
@@ -343,7 +343,7 @@ export async function handleUpdateEndDate(req: Request, res: Response): Promise<
  * GET /api/offers/:id
  */
 export async function handleGetOfferWithProducts(req: Request, res: Response): Promise<void> {
-  const offerId = parseInt(req.params.id, 10);
+  const offerId = parseInt(req.params.id as string, 10);
 
   if (isNaN(offerId)) {
     res.status(400).json({
@@ -497,7 +497,7 @@ export async function handleGetExpiringOffers(req: Request, res: Response): Prom
  * before its end date.
  */
 export async function handleExpireOffer(req: Request, res: Response): Promise<void> {
-  const offerId = parseInt(req.params.id, 10);
+  const offerId = parseInt(req.params.id as string, 10);
 
   if (isNaN(offerId)) {
     res.status(400).json({
