@@ -115,6 +115,10 @@ jobs:
             NODE_ENV=production
             TIMEZONE=Pacific/Auckland
             SCRAPLING_SERVICE_URL=${{ needs.deploy-python-scraper.outputs.scraper_url }}
+            DISABLE_WEEKLY_CRAWLER=true
+            DISABLE_NIGHTLY_SCRAPER=true
+            SENDGRID_FROM_EMAIL=notifications@inventory-genius.com
+            SENDGRID_RECIPIENT_EMAILS=damiengreen04@gmail.com
           secrets: |
             SUPABASE_URL=SUPABASE_URL:latest
             SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest

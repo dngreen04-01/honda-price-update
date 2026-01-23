@@ -29,10 +29,10 @@ export const config: Config = {
     apiVersion: getEnvVar('SHOPIFY_API_VERSION', false) || '2024-01',
   },
   sendgrid: {
-    apiKey: getEnvVar('SENDGRID_API_KEY'),
-    fromEmail: getEnvVar('SENDGRID_FROM_EMAIL'),
-    templateId: getEnvVar('SENDGRID_DIGEST_TEMPLATE_ID'),
-    recipients: getEnvVar('SENDGRID_RECIPIENT_EMAILS').split(',').map(e => e.trim()),
+    apiKey: getEnvVar('SENDGRID_API_KEY', false) || '',
+    fromEmail: getEnvVar('SENDGRID_FROM_EMAIL', false) || '',
+    templateId: getEnvVar('SENDGRID_DIGEST_TEMPLATE_ID', false) || '',
+    recipients: (getEnvVar('SENDGRID_RECIPIENT_EMAILS', false) || '').split(',').map(e => e.trim()).filter(Boolean),
   },
   gemini: {
     apiKey: getEnvVar('GEMINI_API_KEY', false) || '',
