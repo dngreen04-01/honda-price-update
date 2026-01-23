@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.env.*
+*.log
+.git
+.gitignore
+*.md
+tests
+coverage
+frontend
+python-scraper
+migrations
+planning
+.DS_Store

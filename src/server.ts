@@ -49,15 +49,52 @@ import {
 } from './api/offer-push-api.js';
 
 const app = express();
-const PORT = process.env.API_PORT || 3000;
+// Cloud Run uses PORT env var, fallback to API_PORT for local dev
+const PORT = process.env.PORT || process.env.API_PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Health check endpoint
+// Health check endpoint (also at root for Cloud Run)
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// ============================================
+// Cloud Scheduler Trigger Endpoints
+// ============================================
+
+// Trigger nightly scrape (called by Cloud Scheduler)
+app.post('/api/trigger-nightly-scrape', async (_req, res) => {
+  try {
+    logger.info('Cloud Scheduler triggered nightly scrape');
+    const result = await nightlyScraperJob.runNow();
+    res.json({ success: true, message: 'Nightly scrape completed', result });
+  } catch (error) {
+    logger.error('Failed to trigger nightly scrape', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({ success: false, message: 'Failed to trigger nightly scrape' });
+  }
+});
+
+// Trigger weekly crawl (called by Cloud Scheduler)
+app.post('/api/trigger-weekly-crawl', async (_req, res) => {
+  try {
+    logger.info('Cloud Scheduler triggered weekly crawl');
+    const result = await weeklyCrawlerJob.runNow();
+    res.json({ success: true, message: 'Weekly crawl completed', result });
+  } catch (error) {
+    logger.error('Failed to trigger weekly crawl', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    res.status(500).json({ success: false, message: 'Failed to trigger weekly crawl' });
+  }
 });
 
 // Manual price sync endpoint

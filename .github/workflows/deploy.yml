@@ -1,0 +1,213 @@
+name: Deploy to Google Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: honda-price-update
+  REGION: us-central1
+  REGISTRY: us-central1-docker.pkg.dev
+
+jobs:
+  # Job 1: Deploy Python Scraper
+  deploy-python-scraper:
+    name: Deploy Python Scraper
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      scraper_url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build and Push Image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/python-scraper:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/python-scraper:latest \
+            ./python-scraper
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/python-scraper:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/python-scraper:latest
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: python-scraper
+          region: ${{ env.REGION }}
+          image: ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/python-scraper:${{ github.sha }}
+          flags: |
+            --memory=2Gi
+            --cpu=2
+            --timeout=300
+            --min-instances=0
+            --max-instances=5
+            --allow-unauthenticated
+
+      - name: Output URL
+        run: echo "Python Scraper deployed to ${{ steps.deploy.outputs.url }}"
+
+  # Job 2: Deploy Node.js API (depends on Python Scraper)
+  deploy-nodejs-api:
+    name: Deploy Node.js API
+    runs-on: ubuntu-latest
+    needs: deploy-python-scraper
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      api_url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build and Push Image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/nodejs-api:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/nodejs-api:latest \
+            .
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/nodejs-api:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/nodejs-api:latest
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: nodejs-api
+          region: ${{ env.REGION }}
+          image: ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/nodejs-api:${{ github.sha }}
+          env_vars: |
+            NODE_ENV=production
+            TIMEZONE=Pacific/Auckland
+            SCRAPLING_SERVICE_URL=${{ needs.deploy-python-scraper.outputs.scraper_url }}
+          secrets: |
+            SUPABASE_URL=SUPABASE_URL:latest
+            SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest
+            SUPABASE_SERVICE_KEY=SUPABASE_SERVICE_KEY:latest
+            SHOPIFY_STORE_DOMAIN=SHOPIFY_STORE_DOMAIN:latest
+            SHOPIFY_ADMIN_ACCESS_TOKEN=SHOPIFY_ADMIN_ACCESS_TOKEN:latest
+            SENDGRID_API_KEY=SENDGRID_API_KEY:latest
+            GEMINI_API_KEY=GEMINI_API_KEY:latest
+          flags: |
+            --memory=1Gi
+            --cpu=1
+            --timeout=300
+            --min-instances=0
+            --max-instances=10
+            --allow-unauthenticated
+
+      - name: Output URL
+        run: echo "Node.js API deployed to ${{ steps.deploy.outputs.url }}"
+
+  # Job 3: Deploy Frontend (depends on Node.js API)
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: deploy-nodejs-api
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      frontend_url: ${{ steps.deploy.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      - name: Build and Push Image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/frontend:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/frontend:latest \
+            --build-arg VITE_API_URL=${{ needs.deploy-nodejs-api.outputs.api_url }} \
+            --build-arg VITE_SUPABASE_URL=${{ secrets.SUPABASE_URL }} \
+            --build-arg VITE_SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }} \
+            ./frontend
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/frontend:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/frontend:latest
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: frontend
+          region: ${{ env.REGION }}
+          image: ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/honda-price-update/frontend:${{ github.sha }}
+          flags: |
+            --memory=256Mi
+            --cpu=1
+            --min-instances=0
+            --max-instances=3
+            --allow-unauthenticated
+
+      - name: Output URL
+        run: echo "Frontend deployed to ${{ steps.deploy.outputs.url }}"
+
+  # Job 4: Deployment Summary
+  deployment-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-python-scraper, deploy-nodejs-api, deploy-frontend]
+    if: always()
+
+    steps:
+      - name: Print Deployment URLs
+        run: |
+          echo "=========================================="
+          echo "       DEPLOYMENT COMPLETE"
+          echo "=========================================="
+          echo ""
+          echo "Python Scraper: ${{ needs.deploy-python-scraper.outputs.scraper_url }}"
+          echo "Node.js API:    ${{ needs.deploy-nodejs-api.outputs.api_url }}"
+          echo "Frontend:       ${{ needs.deploy-frontend.outputs.frontend_url }}"
+          echo ""
+          echo "=========================================="
