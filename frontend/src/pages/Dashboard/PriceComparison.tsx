@@ -1,6 +1,9 @@
 // @ts-nocheck
 import React, { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
+
+// API URL configuration - uses environment variable in production
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
 import { Input } from '../../components/ui/Input'
 import { ExternalLink, Code, AlertCircle, TrendingDown, TrendingUp, Search, Filter, Upload, Loader2, Check, RefreshCw, Square, CheckSquare, MinusSquare, ChevronDown } from 'lucide-react'
@@ -173,7 +176,7 @@ export const PriceComparison: React.FC = () => {
 
     try {
       // Call the backend price sync API (we'll implement this as a direct Supabase call)
-      const response = await fetch('http://localhost:3000/api/price-sync', {
+      const response = await fetch(`${API_URL}/api/price-sync`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -212,7 +215,7 @@ export const PriceComparison: React.FC = () => {
     setRescrapingUrl(url)
 
     try {
-      const response = await fetch('http://localhost:3000/api/rescrape', {
+      const response = await fetch(`${API_URL}/api/rescrape`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -269,7 +272,7 @@ export const PriceComparison: React.FC = () => {
     setUpdatingProduct(true)
 
     try {
-      const response = await fetch('http://localhost:3000/api/update-product-url', {
+      const response = await fetch(`${API_URL}/api/update-product-url`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -368,7 +371,7 @@ export const PriceComparison: React.FC = () => {
       setBulkProgress({ current: i + 1, total: urlsToRescrape.length })
 
       try {
-        const response = await fetch('http://localhost:3000/api/rescrape', {
+        const response = await fetch(`${API_URL}/api/rescrape`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url }),
@@ -430,7 +433,7 @@ export const PriceComparison: React.FC = () => {
       setBulkProgress({ current: i + 1, total: rowsToPush.length })
 
       try {
-        const response = await fetch('http://localhost:3000/api/price-sync', {
+        const response = await fetch(`${API_URL}/api/price-sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ urls: [row.canonical_url] }),
@@ -478,7 +481,7 @@ export const PriceComparison: React.FC = () => {
     }
 
     try {
-      const response = await fetch('http://localhost:3000/api/supplier-rescrape', {
+      const response = await fetch(`${API_URL}/api/supplier-rescrape`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ supplier }),
@@ -510,7 +513,7 @@ export const PriceComparison: React.FC = () => {
 
     const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(`http://localhost:3000/api/supplier-rescrape/${supplierRescrapeJob.jobId}`)
+        const response = await fetch(`${API_URL}/api/supplier-rescrape/${supplierRescrapeJob.jobId}`)
         const result = await response.json()
 
         if (result.success && result.job) {

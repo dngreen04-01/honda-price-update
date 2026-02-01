@@ -1,6 +1,9 @@
 // @ts-nocheck
 import React, { useEffect, useState, useMemo, useCallback } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/Card'
+
+// API URL configuration - uses environment variable in production
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
 import { Input } from '../../components/ui/Input'
 import { Search, Globe, Package, Tag, ExternalLink, EyeOff, RefreshCw, Filter, Loader2, CheckCircle2, AlertCircle, ChevronDown, Square, CheckSquare, MinusSquare, ShoppingBag, Link, ChevronUp, X, Calendar, Clock, ArrowRight, ShoppingCart, Image as ImageIcon } from 'lucide-react'
 import { format, differenceInDays, isPast, parseISO } from 'date-fns'
@@ -96,10 +99,10 @@ export const Discoveries: React.FC = () => {
     try {
       // Fetch products, offers, stats, and expiring offers in parallel
       const [productsRes, offersRes, statsRes, expiringRes] = await Promise.all([
-        fetch(`http://localhost:3000/api/crawl/results${statusFilter !== 'all' ? `?status=${statusFilter}` : ''}`),
-        fetch('http://localhost:3000/api/crawl/offers'),
-        fetch('http://localhost:3000/api/crawl/stats'),
-        fetch('http://localhost:3000/api/offers/expiring?days=7')
+        fetch(`${API_URL}/api/crawl/results${statusFilter !== 'all' ? `?status=${statusFilter}` : ''}`),
+        fetch(`${API_URL}/api/crawl/offers`),
+        fetch(`${API_URL}/api/crawl/stats`),
+        fetch(`${API_URL}/api/offers/expiring?days=7`)
       ])
 
       if (!productsRes.ok) throw new Error('Failed to fetch products')
@@ -121,7 +124,7 @@ export const Discoveries: React.FC = () => {
       // Fetch Shopify status for each offer
       const statusPromises = offersArray.map(async (offer: CrawlerOffer) => {
         try {
-          const res = await fetch(`http://localhost:3000/api/offers/${offer.id}`)
+          const res = await fetch(`${API_URL}/api/offers/${offer.id}`)
           if (res.ok) {
             const data = await res.json()
             return { id: offer.id, shopifyPage: data.shopifyPage || null }
@@ -148,7 +151,7 @@ export const Discoveries: React.FC = () => {
     setUpdatingStatus(productId)
 
     try {
-      const response = await fetch(`http://localhost:3000/api/crawl/review/${productId}`, {
+      const response = await fetch(`${API_URL}/api/crawl/review/${productId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
@@ -185,7 +188,7 @@ export const Discoveries: React.FC = () => {
 
     try {
       const updatePromises = Array.from(selectedProducts).map(productId =>
-        fetch(`http://localhost:3000/api/crawl/review/${productId}`, {
+        fetch(`${API_URL}/api/crawl/review/${productId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: newStatus })
@@ -216,7 +219,7 @@ export const Discoveries: React.FC = () => {
     setPushDropdownOpen(null)
 
     try {
-      const response = await fetch('http://localhost:3000/api/shopify/push-product', {
+      const response = await fetch(`${API_URL}/api/shopify/push-product`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -268,7 +271,7 @@ export const Discoveries: React.FC = () => {
     setManualResult(null)
 
     try {
-      const response = await fetch('http://localhost:3000/api/shopify/push-url', {
+      const response = await fetch(`${API_URL}/api/shopify/push-url`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -319,8 +322,8 @@ export const Discoveries: React.FC = () => {
     setLoadingProducts(true)
     try {
       const [catalogRes, linkedRes] = await Promise.all([
-        fetch('http://localhost:3000/api/shopify/catalog'),
-        fetch(`http://localhost:3000/api/offers/${offer.id}/products`)
+        fetch(`${API_URL}/api/shopify/catalog`),
+        fetch(`${API_URL}/api/offers/${offer.id}/products`)
       ])
 
       if (catalogRes.ok) {
@@ -365,7 +368,7 @@ export const Discoveries: React.FC = () => {
     setPushOfferResult(null)
 
     try {
-      const response = await fetch('http://localhost:3000/api/offers/push', {
+      const response = await fetch(`${API_URL}/api/offers/push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
