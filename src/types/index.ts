@@ -176,6 +176,20 @@ export interface UserInvitation {
 }
 
 // Configuration
+export interface CloudTasksConfig {
+  projectId: string;
+  location: string;
+  queueName: string;
+  serviceAccountEmail: string;
+  serviceUrl: string;
+}
+
+export interface SentryConfig {
+  dsn: string;
+  environment: string;
+  enabled: boolean;
+}
+
 export interface Config {
   supabase: {
     url: string;
@@ -212,6 +226,8 @@ export interface Config {
   offers: {
     landingPageHandle: string;
   };
+  cloudTasks: CloudTasksConfig;
+  sentry: SentryConfig;
 }
 
 // Utility Types

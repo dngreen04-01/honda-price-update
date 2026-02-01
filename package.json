@@ -35,8 +35,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google-cloud/tasks": "^5.1.0",
     "@google/generative-ai": "^0.24.1",
     "@sendgrid/mail": "^8.1.0",
+    "@sentry/node": "^10.38.0",
     "@shopify/shopify-api": "^11.5.0",
     "@supabase/supabase-js": "^2.39.0",
     "@types/cheerio": "^0.22.35",
@@ -48,6 +50,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^5.1.0",
+    "google-auth-library": "^9.6.0",
     "jsdom": "^23.2.0",
     "node-cron": "^4.2.1",
     "uuid": "^9.0.1",

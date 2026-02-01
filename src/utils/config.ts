@@ -47,4 +47,16 @@ export const config: Config = {
   offers: {
     landingPageHandle: getEnvVar('OFFERS_LANDING_PAGE_HANDLE', false) || 'offers',
   },
+  cloudTasks: {
+    projectId: getEnvVar('GCP_PROJECT_ID', false) || 'honda-price-update',
+    location: getEnvVar('GCP_LOCATION', false) || 'us-central1',
+    queueName: getEnvVar('CLOUD_TASKS_QUEUE', false) || 'job-queue',
+    serviceAccountEmail: getEnvVar('CLOUD_TASKS_SA_EMAIL', false) || '',
+    serviceUrl: getEnvVar('CLOUD_RUN_SERVICE_URL', false) || '',
+  },
+  sentry: {
+    dsn: getEnvVar('SENTRY_DSN', false) || '',
+    environment: getEnvVar('SENTRY_ENVIRONMENT', false) || (process.env.K_SERVICE ? 'production' : 'development'),
+    enabled: !!getEnvVar('SENTRY_DSN', false),
+  },
 };

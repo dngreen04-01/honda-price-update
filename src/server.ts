@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+// Sentry must be imported first before any other modules
+import './utils/sentry.js';
+import { Sentry, sentryEnabled, captureError } from './utils/sentry.js';
+
 import express from 'express';
 import cors from 'cors';
 import { handleManualPriceSync } from './api/price-sync-api.js';
@@ -47,6 +51,8 @@ import {
   handleGetExpiringOffers,
   handleExpireOffer,
 } from './api/offer-push-api.js';
+import workerRoutes from './api/worker-routes.js';
+import schedulerRoutes from './api/scheduler-routes.js';
 
 const app = express();
 // Cloud Run uses PORT env var, fallback to API_PORT for local dev
@@ -76,9 +82,9 @@ app.post('/api/trigger-nightly-scrape', async (_req, res) => {
     const result = await nightlyScraperJob.runNow();
     res.json({ success: true, message: 'Nightly scrape completed', result });
   } catch (error) {
-    logger.error('Failed to trigger nightly scrape', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to trigger nightly scrape', { error: err.message });
+    captureError(err, { endpoint: '/api/trigger-nightly-scrape' });
     res.status(500).json({ success: false, message: 'Failed to trigger nightly scrape' });
   }
 });
@@ -90,9 +96,9 @@ app.post('/api/trigger-weekly-crawl', async (_req, res) => {
     const result = await weeklyCrawlerJob.runNow();
     res.json({ success: true, message: 'Weekly crawl completed', result });
   } catch (error) {
-    logger.error('Failed to trigger weekly crawl', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to trigger weekly crawl', { error: err.message });
+    captureError(err, { endpoint: '/api/trigger-weekly-crawl' });
     res.status(500).json({ success: false, message: 'Failed to trigger weekly crawl' });
   }
 });
@@ -103,9 +109,9 @@ app.post('/api/price-sync', async (req, res) => {
     const result = await handleManualPriceSync(req.body);
     res.json(result);
   } catch (error) {
-    logger.error('API error in /api/price-sync', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('API error in /api/price-sync', { error: err.message });
+    captureError(err, { endpoint: '/api/price-sync', body: req.body });
     res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -119,9 +125,9 @@ app.post('/api/rescrape', async (req, res) => {
     const result = await handleRescrape(req.body);
     res.json(result);
   } catch (error) {
-    logger.error('API error in /api/rescrape', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('API error in /api/rescrape', { error: err.message });
+    captureError(err, { endpoint: '/api/rescrape', body: req.body });
     res.status(500).json({
       success: false,
       message: 'Internal server error',
@@ -268,6 +274,41 @@ app.post('/api/offers/:id/update-end-date', handleUpdateEndDate);
 
 // Manually expire a specific offer
 app.post('/api/offers/:id/expire', handleExpireOffer);
+
+// ============================================
+// Cloud Tasks Worker & Scheduler Routes
+// ============================================
+
+// Worker endpoints (called by Cloud Tasks)
+app.use('/api/worker', workerRoutes);
+
+// Scheduler endpoints (called by Cloud Scheduler, creates Cloud Tasks)
+app.use('/api/schedule', schedulerRoutes);
+
+// ============================================
+// Error Handling
+// ============================================
+
+// Sentry error handler - must be after all routes but before other error handlers
+if (sentryEnabled) {
+  Sentry.setupExpressErrorHandler(app);
+}
+
+// Global error handler - catches any unhandled errors
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  logger.error('Unhandled error', {
+    error: err.message,
+    stack: err.stack,
+  });
+
+  // Capture to Sentry (will only send if enabled)
+  captureError(err, { path: _req.path, method: _req.method });
+
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+  });
+});
 
 // Start server
 app.listen(PORT, () => {

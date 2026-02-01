@@ -119,6 +119,8 @@ jobs:
             DISABLE_NIGHTLY_SCRAPER=true
             SENDGRID_FROM_EMAIL=notifications@inventory-genius.com
             SENDGRID_RECIPIENT_EMAILS=damiengreen04@gmail.com
+            SENTRY_DSN=https://ebc952ec7c6530d29a0e9b66bc17f0ca@o4510306390900737.ingest.us.sentry.io/4510812409823232
+            SENTRY_ENVIRONMENT=production
           secrets: |
             SUPABASE_URL=SUPABASE_URL:latest
             SUPABASE_ANON_KEY=SUPABASE_ANON_KEY:latest
