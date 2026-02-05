@@ -79,3 +79,142 @@ export function addBreadcrumb(breadcrumb: {
   if (!sentryEnabled) return;
   Sentry.addBreadcrumb(breadcrumb);
 }
+
+// ============================================
+// Cron Monitoring (Sentry Crons)
+// ============================================
+
+/**
+ * Monitor configuration for scheduled jobs
+ * Used to track job execution and alert on missed/failed runs
+ */
+export interface CronMonitorConfig {
+  /** Unique identifier for this monitor (slug format) */
+  monitorSlug: string;
+  /** Cron schedule expression (e.g., '0 2 * * *') */
+  schedule: string;
+  /** Timezone for the schedule */
+  timezone: string;
+  /** Maximum expected runtime in minutes */
+  maxRuntimeMinutes?: number;
+  /** Grace period in minutes before alerting on missed check-in */
+  checkinMarginMinutes?: number;
+}
+
+/**
+ * Predefined monitor configurations for scheduled jobs
+ */
+export const CRON_MONITORS = {
+  nightlyScrape: {
+    monitorSlug: 'nightly-price-scraper',
+    schedule: '0 2 * * *',
+    timezone: 'Pacific/Auckland',
+    maxRuntimeMinutes: 60,
+    checkinMarginMinutes: 5,
+  },
+  weeklyCrawl: {
+    monitorSlug: 'weekly-website-crawler',
+    schedule: '0 2 * * 0',
+    timezone: 'Pacific/Auckland',
+    maxRuntimeMinutes: 120,
+    checkinMarginMinutes: 10,
+  },
+  nightlyOffers: {
+    monitorSlug: 'nightly-offers-crawler',
+    schedule: '0 1 * * *',
+    timezone: 'Pacific/Auckland',
+    maxRuntimeMinutes: 30,
+    checkinMarginMinutes: 5,
+  },
+} as const;
+
+/**
+ * Start a cron check-in (marks job as in_progress)
+ * Call this at the beginning of a scheduled job
+ *
+ * @returns Check-in ID to use when completing the check-in, or null if Sentry disabled
+ */
+export function startCronCheckIn(config: CronMonitorConfig): string | null {
+  if (!sentryEnabled) return null;
+
+  const checkInId = Sentry.captureCheckIn(
+    {
+      monitorSlug: config.monitorSlug,
+      status: 'in_progress',
+    },
+    {
+      schedule: {
+        type: 'crontab',
+        value: config.schedule,
+      },
+      timezone: config.timezone,
+      checkinMargin: config.checkinMarginMinutes,
+      maxRuntime: config.maxRuntimeMinutes,
+    }
+  );
+
+  return checkInId;
+}
+
+/**
+ * Complete a cron check-in with success status
+ * Call this when a scheduled job completes successfully
+ */
+export function completeCronCheckIn(
+  checkInId: string | null,
+  monitorSlug: string
+): void {
+  if (!sentryEnabled || !checkInId) return;
+
+  Sentry.captureCheckIn({
+    checkInId,
+    monitorSlug,
+    status: 'ok',
+  });
+}
+
+/**
+ * Complete a cron check-in with error status
+ * Call this when a scheduled job fails
+ */
+export function failCronCheckIn(
+  checkInId: string | null,
+  monitorSlug: string
+): void {
+  if (!sentryEnabled || !checkInId) return;
+
+  Sentry.captureCheckIn({
+    checkInId,
+    monitorSlug,
+    status: 'error',
+  });
+}
+
+/**
+ * Wrapper to execute a job with automatic cron monitoring
+ * Handles check-in/check-out and error capture automatically
+ *
+ * @example
+ * const result = await withCronMonitoring(CRON_MONITORS.nightlyScrape, async () => {
+ *   return await nightlyScraperJob.runNow();
+ * });
+ */
+export async function withCronMonitoring<T>(
+  config: CronMonitorConfig,
+  jobFn: () => Promise<T>
+): Promise<T> {
+  const checkInId = startCronCheckIn(config);
+
+  try {
+    const result = await jobFn();
+    completeCronCheckIn(checkInId, config.monitorSlug);
+    return result;
+  } catch (error) {
+    failCronCheckIn(checkInId, config.monitorSlug);
+    // Also capture the error for detailed stack trace
+    if (error instanceof Error) {
+      captureError(error, { monitorSlug: config.monitorSlug });
+    }
+    throw error;
+  }
+}
