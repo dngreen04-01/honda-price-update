@@ -106,19 +106,18 @@ export async function syncPricesToShopify(productUrls: string[]): Promise<{
         variantId: cacheData.shopify_variant_id,
         price: salePrice.toFixed(2),
         compareAtPrice: hasActiveSale && originalPrice ? originalPrice.toFixed(2) : null,
-      });
+        // Store metadata for post-sync cache update
+        _meta: {
+          canonicalUrl,
+          salePrice,
+          compareAtPrice: hasActiveSale ? originalPrice : null,
+          productTitle: cacheData.product_title,
+          variantTitle: cacheData.variant_title,
+          variantSku: cacheData.variant_sku,
+        },
+      } as ShopifyPriceUpdate & { _meta: any });
 
-      // Update cache with new scraped prices (keep existing Shopify data)
-      await upsertShopifyCatalogCache(
-        cacheData.shopify_product_id,
-        cacheData.shopify_variant_id,
-        canonicalUrl,
-        salePrice, // This will update shopify_price after successful sync
-        hasActiveSale ? originalPrice : null, // This will update shopify_compare_at_price
-        cacheData.product_title,
-        cacheData.variant_title,
-        cacheData.variant_sku
-      );
+      // NOTE: Cache update moved to AFTER successful Shopify API call (see below)
 
       logger.debug('Queued price update', {
         url,
@@ -146,6 +145,34 @@ export async function syncPricesToShopify(productUrls: string[]): Promise<{
   }
 
   const result = await shopifyClient.updateVariantPrices(updates);
+
+  // Update cache ONLY after successful Shopify sync
+  // This prevents cache/Shopify price mismatch if API call fails
+  if (result.success > 0) {
+    logger.info('Updating cache for successfully synced products');
+    for (const update of updates) {
+      const meta = (update as any)._meta;
+      if (meta) {
+        try {
+          await upsertShopifyCatalogCache(
+            update.productId,
+            update.variantId,
+            meta.canonicalUrl,
+            meta.salePrice,
+            meta.compareAtPrice,
+            meta.productTitle,
+            meta.variantTitle,
+            meta.variantSku
+          );
+        } catch (cacheError) {
+          logger.warn('Failed to update cache after sync', {
+            variantId: update.variantId,
+            error: cacheError instanceof Error ? cacheError.message : String(cacheError),
+          });
+        }
+      }
+    }
+  }
 
   logger.info('Shopify price sync completed', {
     synced: result.success,

@@ -88,7 +88,7 @@ async function fetchShopifyProducts() {
                 }
               }
             }
-            metafields(first: 10, namespace: "custom") {
+            metafields(first: 50, namespace: "custom") {
               edges {
                 node {
                   namespace
