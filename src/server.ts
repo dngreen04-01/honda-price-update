@@ -35,6 +35,7 @@ import { handleScrapeBike } from './api/bike-scraper-api.js';
 import { handlePushToShopify, handlePushUrlToShopify } from './api/shopify-push-api.js';
 import { scheduleWeeklyCrawl, weeklyCrawlerJob } from './scheduler/weekly-crawler-job.js';
 import { scheduleNightlyScrape, nightlyScraperJob } from './scheduler/nightly-scraper-job.js';
+import { scheduleNightlyOffersCrawl, nightlyOffersCrawlerJob } from './scheduler/nightly-offers-crawler-job.js';
 import {
   handleStartSupplierRescrape,
   handleGetSupplierRescrapeStatus,
@@ -100,6 +101,20 @@ app.post('/api/trigger-weekly-crawl', async (_req, res) => {
     logger.error('Failed to trigger weekly crawl', { error: err.message });
     captureError(err, { endpoint: '/api/trigger-weekly-crawl' });
     res.status(500).json({ success: false, message: 'Failed to trigger weekly crawl' });
+  }
+});
+
+// Trigger nightly offers crawl (called by Cloud Scheduler)
+app.post('/api/trigger-nightly-offers', async (_req, res) => {
+  try {
+    logger.info('Cloud Scheduler triggered nightly offers crawl');
+    const result = await nightlyOffersCrawlerJob.runNow();
+    res.json({ success: true, message: 'Nightly offers crawl completed', result });
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to trigger nightly offers crawl', { error: err.message });
+    captureError(err, { endpoint: '/api/trigger-nightly-offers' });
+    res.status(500).json({ success: false, message: 'Failed to trigger nightly offers crawl' });
   }
 });
 
@@ -339,6 +354,20 @@ app.listen(PORT, () => {
       })
       .catch((error) => {
         logger.error('Failed to start nightly scraper scheduler', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  // Start the nightly offers crawler scheduler
+  if (process.env.DISABLE_NIGHTLY_OFFERS_CRAWLER !== 'true') {
+    scheduleNightlyOffersCrawl()
+      .then(() => {
+        const config = nightlyOffersCrawlerJob.getScheduleConfig();
+        console.log(`Nightly offers crawler scheduled: ${config.description}`);
+      })
+      .catch((error) => {
+        logger.error('Failed to start nightly offers crawler scheduler', {
           error: error instanceof Error ? error.message : String(error),
         });
       });
